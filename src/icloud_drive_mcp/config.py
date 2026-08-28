@@ -39,9 +39,14 @@ class Config:
     # Optional jail: when set, every tool path is resolved inside this folder.
     root: tuple[str, ...] = ()
     read_only: bool = False
-    # 0 means no limit. People store what they like; the only real ceiling is
-    # what the client can carry, and that is not ours to guess.
+    # 0 means no limit. People store what they like.
     max_file_bytes: int = 0
+    # Reads are different from writes, and not by policy. A file read comes
+    # back through the conversation as text or base64, so it has to fit in a
+    # context window — 20 MB of binary is ~7M tokens, roughly 35 context
+    # windows — and the server holds several copies of it while encoding.
+    # This ceiling is about that trip, never about what may be stored.
+    max_read_bytes: int = 10 * 1024 * 1024
     default_page_size: int = 50
     request_timeout: int = 120
 
@@ -75,6 +80,7 @@ class Config:
             root=parse_root(os.environ.get("ICLOUD_ROOT_PATH")),
             read_only=_flag("ICLOUD_READ_ONLY"),
             max_file_bytes=_int("ICLOUD_MAX_FILE_BYTES", 0),
+            max_read_bytes=_int("ICLOUD_MAX_READ_BYTES", 10 * 1024 * 1024),
             default_page_size=_int("ICLOUD_PAGE_SIZE", 50),
             request_timeout=_int("ICLOUD_REQUEST_TIMEOUT", 120),
             host=os.environ.get("HOST", "0.0.0.0"),

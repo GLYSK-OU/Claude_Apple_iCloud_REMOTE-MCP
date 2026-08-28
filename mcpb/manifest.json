@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "icloud-drive",
   "display_name": "iCloud Drive",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Read and write your Apple iCloud Drive from Claude, with no synced Mac or PC folder.",
   "long_description": "Gives Claude direct access to the files in your iCloud Drive \u2014 listing, reading, searching, writing, organising, and deleting them \u2014 by talking to Apple's iCloud service rather than a synced folder on disk. Everything runs locally on this computer, so your Apple credentials never leave it and no server is involved.\n\nIMPORTANT: this extension runs on the computer you install it on. Claude on iPhone and iPad cannot reach it, because nothing runs on the phone and Anthropic's servers make the tool call. A conversation started here will lose these tools when you open it on a phone. For mobile access you need the self-hosted connector instead \u2014 see the project documentation.\n\nSign-in happens once through a page on your own computer, and needs your real Apple ID password plus a six-digit code from a trusted device. Apple does not accept app-specific passwords for iCloud Drive. The session then lasts around 30 days, which is Apple's limit rather than this software's.\n\nNote that Apple offers no Drive-only login: the session this creates is a general iCloud session that could also reach Photos, Contacts, Calendar, Reminders, Notes and Find My. This software only ever uses Drive, but if that distinction matters to you, sign in with a separate Apple ID that holds only the folder you want to share.\n\nDeletes go to Recently Deleted rather than being destroyed, overwrites keep the previous version, and you can confine Claude to a single folder so nothing else in your Drive is reachable.",
   "author": {
@@ -77,7 +77,7 @@
     "max_file_mb": {
       "type": "number",
       "title": "Largest file (MB)",
-      "description": "Refuse to read or write any single file bigger than this. Leave at 0 for no limit.",
+      "description": "Refuse to store any single file bigger than this. Leave at 0 for no limit. Reading a file back is capped separately, because it has to fit in the conversation.",
       "default": 0,
       "min": 0,
       "max": 100000,

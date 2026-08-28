@@ -338,6 +338,46 @@ install the plugin instead; it does this for you.)
 
 ---
 
+## What actually travels through the server
+
+Worth knowing before you size a host. **File contents pass through it in full.**
+There is no redirect and no signed-URL handoff:
+
+```
+read   Apple ──▶ the server (buffered) ──▶ Anthropic ──▶ your conversation
+write  your conversation ──▶ Anthropic ──▶ the server ──▶ Apple
+```
+
+Two consequences.
+
+**Memory.** A read is buffered whole, then encoded, so peak memory is roughly
+**5× the file size** for binary content — 20 MB of file costs about 100 MB of
+RAM while it is being encoded. On a small VPS shared with other services that
+is the difference between working and being OOM-killed.
+
+**Context.** The bytes come back as text or base64 inside the tool result. That
+20 MB file encodes to roughly **7 million tokens**, against a context window of
+a couple of hundred thousand. It could never arrive whole, whatever the server
+allowed.
+
+So the two limits are deliberately different things:
+
+| | Default | What it governs |
+|---|---|---|
+| `ICLOUD_MAX_FILE_BYTES` | `0`, unlimited | What may be **stored**. Your Drive, your files |
+| `ICLOUD_MAX_READ_BYTES` | 10 MiB | What may be **read back** in one call |
+
+The read ceiling is not policy — it is the size of the trip home. Raise it if
+you have the RAM and the file really will fit; a refusal says so explicitly
+rather than pretending the limit is about storage.
+
+**Concurrency.** `pyicloud` is not thread-safe, so every Drive operation is
+serialised on one lock: the server does one thing at a time and queues the
+rest. That is correct rather than fast. It suits one person's use comfortably
+and is not built to serve a crowd.
+
+---
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -347,7 +387,8 @@ install the plugin instead; it does this for you.)
 | `ICLOUD_SESSION_DIR` | `/data/icloud-session` | Where the trust token lives. Must persist |
 | `ICLOUD_ROOT_PATH` | whole Drive | Confine all tools to this folder |
 | `ICLOUD_READ_ONLY` | `false` | Refuse every write, move, and delete |
-| `ICLOUD_MAX_FILE_BYTES` | `0` | Per-file ceiling in bytes. `0` means no limit |
+| `ICLOUD_MAX_FILE_BYTES` | `0` | Ceiling on what may be stored, in bytes. `0` means no limit |
+| `ICLOUD_MAX_READ_BYTES` | `10485760` | Ceiling on one read, because it must fit the conversation |
 | `ICLOUD_PAGE_SIZE` | `50` | Default listing page size |
 | `PUBLIC_URL` | — | **Required for `http`.** Public HTTPS base URL, no trailing slash |
 | `MCP_GATE_PASSWORD` | — | Typed on the OAuth consent screen |
@@ -412,7 +453,7 @@ git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.g
   ~/Developer/iCloud_Drive_2_Claude_Connector
 cd ~/Developer/iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # expect: 130 passed
+.venv/bin/python -m pytest          # expect: 137 passed
 claude plugin validate .            # expect: Validation passed
 ```
 
@@ -467,7 +508,7 @@ so the connector cannot reach anything else.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 130 tests, no Apple account needed
+.venv/bin/python -m pytest        # 137 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 

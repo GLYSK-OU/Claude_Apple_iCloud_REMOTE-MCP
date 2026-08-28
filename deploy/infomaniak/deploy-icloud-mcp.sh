@@ -76,8 +76,12 @@ MCP_GATE_PASSWORD=${gate}
 ADMIN_TOKEN=${admin}
 MCP_STATIC_TOKEN=${static}
 
-# No per-file ceiling. Set a byte count here if you ever want one.
+# No ceiling on what may be stored.
 ICLOUD_MAX_FILE_BYTES=0
+# One read has to come back through the conversation, and is buffered and
+# encoded here on the way — peak memory is roughly 5x the file size. Raise this
+# only if the VPS has the RAM to spare alongside its other services.
+ICLOUD_MAX_READ_BYTES=10485760
 ENV
     chmod 0600 "$ENV_FILE"
     note "wrote ${ENV_FILE}"

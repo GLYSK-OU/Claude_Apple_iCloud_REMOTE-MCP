@@ -301,12 +301,16 @@ class DriveClient:
 
     def read_file(self, raw_path: str, max_bytes: int | None = None) -> tuple[bytes, NodeInfo]:
         path = self._parse(raw_path)
-        # 0 anywhere means "no ceiling"; otherwise the tighter of the two wins.
-        configured = self._config.max_file_bytes
-        if max_bytes and configured:
-            limit = min(max_bytes, configured)
-        else:
-            limit = max_bytes or configured
+        # Three ceilings can apply: what the caller asked for, the store-wide
+        # one (0 = unlimited), and the read-back one. The tightest non-zero
+        # value wins, because a read has to survive the trip back through the
+        # conversation as well as the trip off Apple's servers.
+        candidates = [
+            value
+            for value in (max_bytes, self._config.max_file_bytes, self._config.max_read_bytes)
+            if value
+        ]
+        limit = min(candidates) if candidates else 0
         with self._lock:
             node = self._resolve(path, refresh=True)
             if node.type != "file":
@@ -316,23 +320,28 @@ class DriveClient:
             size = node.size or 0
             if limit and size > limit:
                 raise TooLargeError(
-                    f"'{self._display(path)}' is {size} bytes, over the {limit} byte limit for a "
-                    "single read. Set ICLOUD_MAX_FILE_BYTES to 0 for no limit, or raise it."
+                    f"'{self._display(path)}' is {size} bytes, over the {limit} byte limit "
+                    "for a single read. This limit is about returning the file through the "
+                    "conversation, not about what may be stored: encoded, a file this size "
+                    "would be far larger than a context window. Ask for a smaller file, or "
+                    "raise ICLOUD_MAX_READ_BYTES on the server if it really will fit."
                 )
             try:
                 with node.open(stream=True) as response:
                     buffer = io.BytesIO()
                     for chunk in response.iter_content(chunk_size=64 * 1024):
                         buffer.write(chunk)
+                        # Apple's reported size can lag the real object, so stop
+                        # on the way in as well as checking it beforehand.
                         if limit and buffer.tell() > limit:
                             raise TooLargeError(
                                 f"'{self._display(path)}' exceeded the {limit} byte read limit "
-                                "while downloading."
+                                "while downloading, so the transfer was abandoned."
                             )
             except PyiCloudAPIResponseException as exc:
                 raise UpstreamError(f"iCloud refused the download of '{self._display(path)}': {exc}") from exc
             info = self._info(node, path)
-        return buffer.getvalue(), info
+        return bytes(buffer.getbuffer()), info
 
     def search(
         self, query: str, raw_path: str, limit: int, max_depth: int, include_folders: bool

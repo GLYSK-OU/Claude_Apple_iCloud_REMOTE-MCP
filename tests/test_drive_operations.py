@@ -279,3 +279,55 @@ def test_default_config_has_no_size_ceiling():
     from icloud_drive_mcp.config import Config
 
     assert Config().max_file_bytes == 0
+
+
+def test_read_ceiling_is_separate_from_the_storage_ceiling(config, monkeypatch):
+    """Storage is unlimited by default; reading back is not, and cannot be.
+
+    A read returns through the conversation, so it must fit a context window.
+    Twenty megabytes of binary is roughly seven million tokens.
+    """
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    client = DriveClient(replace(config, max_file_bytes=0, max_read_bytes=1000))
+    tree = build_tree()
+    monkeypatch.setattr(client, "_connect", lambda: FakeAPI(tree))
+
+    # Storing more than the read ceiling is fine.
+    client.write_file("/Documents/big.bin", b"x" * 5000, overwrite=True)
+
+    # Reading it back is refused, and the message explains it is not about storage.
+    with pytest.raises(TooLargeError) as exc:
+        client.read_file("/Documents/big.bin")
+    assert "not about what may be stored" in str(exc.value)
+    assert "ICLOUD_MAX_READ_BYTES" in str(exc.value)
+
+
+def test_read_ceiling_takes_the_tightest_of_the_three(config, monkeypatch):
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    client = DriveClient(replace(config, max_file_bytes=0, max_read_bytes=5000))
+    monkeypatch.setattr(client, "_connect", lambda: FakeAPI(build_tree()))
+    client.write_file("/Documents/mid.bin", b"x" * 3000, overwrite=True)
+
+    # Within the server ceiling, but the caller asked for less.
+    with pytest.raises(TooLargeError):
+        client.read_file("/Documents/mid.bin", max_bytes=1000)
+    # Without a caller limit it succeeds.
+    data, _ = client.read_file("/Documents/mid.bin")
+    assert len(data) == 3000
+
+
+def test_default_read_ceiling_is_set_but_storage_is_not():
+    from icloud_drive_mcp.config import Config
+
+    assert Config().max_file_bytes == 0
+    assert Config().max_read_bytes > 0
