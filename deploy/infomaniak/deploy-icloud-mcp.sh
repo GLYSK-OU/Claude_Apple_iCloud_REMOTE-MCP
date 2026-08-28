@@ -103,11 +103,57 @@ note "container icloud-mcp"
 # ---------------------------------------------------------------- 5. caddy
 step "Publishing ${DOMAIN}"
 install -d -m 0755 /etc/caddy/conf.d
+
+# Caddy provisions its file logger at load time, so a missing directory fails
+# the reload even though `caddy validate` passed.
+install -d -m 0755 -o caddy -g caddy /var/log/caddy 2>/dev/null \
+    || install -d -m 0755 /var/log/caddy
+
+# A conf.d file is inert unless the main Caddyfile imports it. Say so rather
+# than reporting success over a vhost nothing will ever read.
+if ! grep -qE '^\s*import\s+.*conf\.d' /etc/caddy/Caddyfile 2>/dev/null; then
+    die "/etc/caddy/Caddyfile does not import conf.d. Add this line to it:
+
+    import /etc/caddy/conf.d/*.caddy
+
+  then re-run this script. Without it the vhost would sit on disk unused."
+fi
+
+VHOST=/etc/caddy/conf.d/icloud.caddy
+BACKUP=""
+if [ -f "$VHOST" ]; then
+    BACKUP="$(mktemp)"
+    cp "$VHOST" "$BACKUP"
+fi
+
 sed -e "s/icloud\.lopes\.me/${DOMAIN}/" -e "s/127\.0\.0\.1:8440/127.0.0.1:${PORT}/" \
-    "${HERE}/icloud.caddy" > /etc/caddy/conf.d/icloud.caddy
-caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
-    || die "caddy validate failed — /etc/caddy/conf.d/icloud.caddy was written but not loaded"
-systemctl reload caddy
+    "${HERE}/icloud.caddy" > "$VHOST"
+
+# Leaving a broken vhost behind would stop Caddy starting on the next reboot,
+# taking every other site on this box down with it. Always put it back.
+restore_vhost() {
+    if [ -n "$BACKUP" ]; then
+        cp "$BACKUP" "$VHOST"
+    else
+        rm -f "$VHOST"
+    fi
+    systemctl reload caddy >/dev/null 2>&1 || true
+}
+
+if ! caddy validate --config /etc/caddy/Caddyfile >/tmp/caddy-validate.log 2>&1; then
+    printf '\n--- caddy validate ---\n'; tail -20 /tmp/caddy-validate.log
+    restore_vhost
+    die "the vhost did not validate. It has been removed and Caddy left as it was."
+fi
+
+if ! systemctl reload caddy 2>/tmp/caddy-reload.log; then
+    printf '\n--- systemctl ---\n'; tail -5 /tmp/caddy-reload.log
+    printf '\n--- journalctl -u caddy ---\n'
+    journalctl -u caddy --no-pager -n 25 2>/dev/null | tail -25
+    restore_vhost
+    die "caddy could not reload. The vhost has been removed and Caddy restored,
+  so your other sites are unaffected. The error is above."
+fi
 note "vhost loaded, TLS will be issued on first request"
 
 # ----------------------------------------------------------------- 6. wait
