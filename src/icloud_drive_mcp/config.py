@@ -67,6 +67,9 @@ class Config:
     # terminal and signs in through a local web page instead.
     is_desktop: bool = False
     oauth_store: Path = Path("/data/oauth-store.json")
+    # Which Apple services the account holder authorised, chosen on the
+    # sign-in page. Beside the OAuth store so one volume holds all state.
+    grant_store: Path = Path("/data/service-grant.json")
     access_token_ttl: int = 3600
     extra_env: dict[str, str] = field(default_factory=dict)
 
@@ -91,6 +94,7 @@ class Config:
             gate_password=os.environ.get("MCP_GATE_PASSWORD", ""),
             static_token=os.environ.get("MCP_STATIC_TOKEN", ""),
             admin_token=os.environ.get("ADMIN_TOKEN", ""),
+            grant_store=Path(os.environ.get("ICLOUD_GRANT_PATH", "/data/service-grant.json")).expanduser(),
             oauth_store=Path(
                 os.environ.get("OAUTH_STORE_PATH", str(session_dir.parent / "oauth-store.json"))
             ),

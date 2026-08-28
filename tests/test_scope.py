@@ -272,3 +272,103 @@ def test_the_sign_in_page_carries_the_picker():
     assert 'class="svc"' in body
     assert 'id="all"' in body, "the everything switch"
     assert "Photos" in body and "Wallet" in body
+
+
+# ------------------------------------------------------------- the round trip
+
+
+def _form(values):
+    """A Starlette-ish form: repeated keys, getlist."""
+
+    class _F(dict):
+        def __init__(self, pairs):
+            super().__init__()
+            self._pairs = list(pairs)
+            for key, value in pairs:
+                self[key] = value
+
+        def getlist(self, key):
+            return [v for k, v in self._pairs if k == key]
+
+    return _F(values)
+
+
+def test_the_switches_become_the_grant():
+    from icloud_drive_mcp.login import grant_from_form
+
+    form = _form([("services", "drive"), ("services", "photos"), ("services", "calendar")])
+
+    assert grant_from_form(form).services == {"drive", "photos", "calendar"}
+
+
+def test_services_left_alone_are_simply_absent():
+    """An unchecked box posts nothing, so absence has to mean 'not granted'."""
+    from icloud_drive_mcp.login import grant_from_form
+
+    assert grant_from_form(_form([("services", "drive")])).is_drive_only
+
+
+def test_a_form_that_posts_nothing_still_grants_drive():
+    from icloud_drive_mcp.login import grant_from_form
+
+    assert grant_from_form(_form([])).is_drive_only
+
+
+def test_a_posted_unavailable_service_is_dropped():
+    """Someone crafting a POST cannot grant what the picker greyed out."""
+    from icloud_drive_mcp.login import grant_from_form
+
+    form = _form([("services", "drive"), ("services", "wallet"), ("services", "messages")])
+
+    assert grant_from_form(form).services == frozenset({DRIVE})
+
+
+def test_a_saved_grant_reaches_the_live_client(config, monkeypatch, tmp_path):
+    """The whole point: switching Photos on makes Photos reachable."""
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    store = tmp_path / "grant.json"
+    scoped_config = replace(config, grant_store=store)
+    save_grant(store, Grant.of(["drive", "photos"]))
+
+    drive_client = DriveClient(scoped_config)
+    monkeypatch.setattr(drive_client, "_connect", lambda: _FullAppleClient())
+
+    assert drive_client._client().photos == "photos-service"
+    with pytest.raises(ServiceNotPermittedError):
+        _ = drive_client._client().contacts
+
+
+def test_changing_the_grant_drops_the_client_bound_to_the_old_one(config, monkeypatch):
+    """Otherwise a widened grant would not take effect until a restart, and a
+    narrowed one would keep working — much the worse of the two."""
+    from icloud_drive_mcp.drive import DriveClient
+
+    drive_client = DriveClient(config)
+    monkeypatch.setattr(drive_client, "_connect", lambda: _FullAppleClient())
+
+    with pytest.raises(ServiceNotPermittedError):
+        _ = drive_client._client().photos
+
+    drive_client.set_grant(Grant.of(["drive", "photos"]))
+    assert drive_client._client().photos == "photos-service"
+
+    drive_client.set_grant(Grant.drive_only())
+    with pytest.raises(ServiceNotPermittedError):
+        _ = drive_client._client().photos
+
+
+def test_status_reports_what_was_authorised(config, monkeypatch):
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    drive_client = DriveClient(config)
+    monkeypatch.setattr(drive_client, "_connect", lambda: FakeAPI(build_tree()))
+    drive_client.set_grant(Grant.of(["drive", "photos"]))
+
+    status = drive_client.session_status()
+
+    assert status["authorised_services"] == ["iCloud Drive", "Photos"]

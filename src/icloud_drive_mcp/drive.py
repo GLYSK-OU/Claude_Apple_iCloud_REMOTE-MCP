@@ -50,6 +50,7 @@ from .errors import (
 )
 from .paths import DrivePath, display_path, parse_path, validate_name
 from .scope import Scoped
+from .services import Grant, load_grant
 
 LOGGER = logging.getLogger(__name__)
 
@@ -105,12 +106,29 @@ class DriveClient:
         self._config = config
         self._lock = threading.RLock()
         self._api: PyiCloudService | None = None
+        # Read from disk rather than held from start-up, so a grant changed at
+        # the sign-in page takes effect without restarting the server.
+        self._grant: Grant | None = None
 
     # ---------------------------------------------------------------- session
 
     @property
     def config(self) -> Config:
         return self._config
+
+    @property
+    def grant(self) -> Grant:
+        """What the account holder authorised, re-read after any change."""
+        with self._lock:
+            if self._grant is None:
+                self._grant = load_grant(self._config.grant_store)
+            return self._grant
+
+    def set_grant(self, grant: Grant) -> None:
+        """Apply a new grant and drop the cached client bound to the old one."""
+        with self._lock:
+            self._grant = grant
+            self._api = None
 
     def _connect(self) -> PyiCloudService:
         """Build a client from the persisted session, or fail with guidance."""
@@ -144,7 +162,7 @@ class DriveClient:
         if self._api is None:
             # Scoped here rather than inside _connect, so a test that swaps
             # _connect for a fake is still held to the same limit.
-            self._api = Scoped(self._connect())
+            self._api = Scoped(self._connect(), self.grant)
         return self._api
 
     def reset(self) -> None:
@@ -170,6 +188,9 @@ class DriveClient:
                 "session_files": cookie_files,
                 "read_only": self._config.read_only,
                 "root_path": "/" + "/".join(self._config.root) if self._config.root else "/",
+                # What the account holder authorised. Anything absent here is
+                # refused by the code, not merely left uncalled.
+                "authorised_services": self.grant.describe(),
             }
             try:
                 api = self._client()

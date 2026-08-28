@@ -34,6 +34,7 @@ from pyicloud.exceptions import (
 
 from .config import Config
 from .scope import Scoped
+from .services import Grant
 
 LOGGER = logging.getLogger(__name__)
 
@@ -584,6 +585,22 @@ def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
         "root_entry_count": len(entries),
         "root_entries_preview": entries[:10],
     }
+
+
+def grant_from_form(form: Any) -> Grant:
+    """Read the service switches off the sign-in form.
+
+    A checkbox posts nothing when it is off, so absence is the answer for
+    every service the user left alone — which is why the default has to be
+    the narrow one. Drive rides along in a hidden field, because its own
+    switch is disabled and a disabled control posts nothing either.
+    """
+    try:
+        chosen = form.getlist("services")
+    except AttributeError:  # a plain mapping, in tests and the local flow
+        raw = form.get("services")
+        chosen = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+    return Grant.of([str(value) for value in chosen if value])
 
 
 def code_from_form(form: Any) -> str:

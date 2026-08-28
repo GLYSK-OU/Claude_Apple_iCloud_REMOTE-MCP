@@ -33,10 +33,12 @@ from .login import (
     PendingLogin,
     code_from_form,
     finish_login,
+    grant_from_form,
     resend_code,
     start_login,
 )
 from .security import SECURITY_HEADERS, constant_time_equals
+from .services import save_grant
 from .webui import page, signin_code_page, signin_done_page, signin_password_page
 
 LOGGER = logging.getLogger(__name__)
@@ -165,6 +167,11 @@ class LocalSignInServer:
                 step = str(form.get("step") or "password")
                 try:
                     if step == "password":
+                        # Before Apple issues the session, so the grant that
+                        # limits it is already in place when it arrives.
+                        granted = grant_from_form(form)
+                        save_grant(self._config.grant_store, granted)
+                        self._client.set_grant(granted)
                         started = start_login(
                             self._config,
                             str(form.get("apple_id") or self._config.apple_id).strip(),
@@ -222,7 +229,13 @@ class LocalSignInServer:
         if stage == "code":
             delivery = self._pending.delivery_method if self._pending else ""
             return signin_code_page(self._action(), message, delivery)
-        return signin_password_page(self._config.apple_id, self._action(), message, local=True)
+        return signin_password_page(
+            self._config.apple_id,
+            self._action(),
+            message,
+            local=True,
+            granted=self._client.grant.services,
+        )
 
     def _done_page(self, message: str) -> Response:
         return signin_done_page(message)

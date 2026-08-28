@@ -28,6 +28,7 @@ from .login import (
     PendingLoginRegistry,
     code_from_form,
     finish_login,
+    grant_from_form,
     resend_code,
     start_login,
 )
@@ -41,6 +42,7 @@ from .security import (
     set_admin_cookie,
 )
 from .server import build_server
+from .services import save_grant
 from .webui import alert as _alert
 from .webui import page as _page
 from .webui import signin_code_page, signin_done_page, signin_password_page
@@ -358,10 +360,19 @@ def _register_admin(
                 if step == "password":
                     apple_id = str(form.get("apple_id") or config.apple_id).strip()
                     password = str(form.get("password") or "")
+                    # Record the switches before contacting Apple. The session
+                    # about to be created is un-scoped, so the grant limiting
+                    # it must already exist when it arrives.
+                    granted = grant_from_form(form)
+                    save_grant(config.grant_store, granted)
+                    client.set_grant(granted)
                     started = await anyio.to_thread.run_sync(start_login, config, apple_id, password)
                     if started is None:
                         client.reset()
-                        return _admin_done("Signed in. The session was already trusted, no code needed.")
+                        return _admin_done(
+                            "Signed in. The session was already trusted, no code needed. "
+                            f"Claude may reach: {', '.join(granted.describe())}."
+                        )
                     pending.set(started)
                     stage = "code"
                     message = started.notice or (
@@ -389,7 +400,8 @@ def _register_admin(
                         hosted_signin.record(result)
                         return _admin_done(
                             f"Signed in as {result['apple_id']}. "
-                            f"iCloud Drive root has {result['root_entry_count']} entries.",
+                            f"iCloud Drive root has {result['root_entry_count']} entries. "
+                            f"Claude may reach: {', '.join(client.grant.describe())}.",
                         )
             except LoginError as exc:
                 message = str(exc)
@@ -402,7 +414,9 @@ def _register_admin(
         if stage == "code":
             current = pending.take()
             return signin_code_page(action, message, current.delivery_method if current else "")
-        return signin_password_page(config.apple_id, action, message, local=False)
+        return signin_password_page(
+            config.apple_id, action, message, local=False, granted=client.grant.services
+        )
 
     _ = admin_login
 
