@@ -39,7 +39,9 @@ class Config:
     # Optional jail: when set, every tool path is resolved inside this folder.
     root: tuple[str, ...] = ()
     read_only: bool = False
-    max_file_bytes: int = 25 * 1024 * 1024
+    # 0 means no limit. People store what they like; the only real ceiling is
+    # what the client can carry, and that is not ours to guess.
+    max_file_bytes: int = 0
     default_page_size: int = 50
     request_timeout: int = 120
 
@@ -72,7 +74,7 @@ class Config:
             session_dir=session_dir,
             root=parse_root(os.environ.get("ICLOUD_ROOT_PATH")),
             read_only=_flag("ICLOUD_READ_ONLY"),
-            max_file_bytes=_int("ICLOUD_MAX_FILE_BYTES", 25 * 1024 * 1024),
+            max_file_bytes=_int("ICLOUD_MAX_FILE_BYTES", 0),
             default_page_size=_int("ICLOUD_PAGE_SIZE", 50),
             request_timeout=_int("ICLOUD_REQUEST_TIMEOUT", 120),
             host=os.environ.get("HOST", "0.0.0.0"),

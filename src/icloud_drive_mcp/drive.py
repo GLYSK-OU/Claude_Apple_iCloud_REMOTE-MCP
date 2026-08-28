@@ -301,7 +301,12 @@ class DriveClient:
 
     def read_file(self, raw_path: str, max_bytes: int | None = None) -> tuple[bytes, NodeInfo]:
         path = self._parse(raw_path)
-        limit = min(max_bytes or self._config.max_file_bytes, self._config.max_file_bytes)
+        # 0 anywhere means "no ceiling"; otherwise the tighter of the two wins.
+        configured = self._config.max_file_bytes
+        if max_bytes and configured:
+            limit = min(max_bytes, configured)
+        else:
+            limit = max_bytes or configured
         with self._lock:
             node = self._resolve(path, refresh=True)
             if node.type != "file":
@@ -309,17 +314,17 @@ class DriveClient:
                     f"'{self._display(path)}' is a folder. Use icloud_list_directory to see inside it."
                 )
             size = node.size or 0
-            if size > limit:
+            if limit and size > limit:
                 raise TooLargeError(
                     f"'{self._display(path)}' is {size} bytes, over the {limit} byte limit for a "
-                    "single read. Raise ICLOUD_MAX_FILE_BYTES on the server, or ask for a smaller file."
+                    "single read. Set ICLOUD_MAX_FILE_BYTES to 0 for no limit, or raise it."
                 )
             try:
                 with node.open(stream=True) as response:
                     buffer = io.BytesIO()
                     for chunk in response.iter_content(chunk_size=64 * 1024):
                         buffer.write(chunk)
-                        if buffer.tell() > limit:
+                        if limit and buffer.tell() > limit:
                             raise TooLargeError(
                                 f"'{self._display(path)}' exceeded the {limit} byte read limit "
                                 "while downloading."
@@ -386,10 +391,11 @@ class DriveClient:
         path = self._parse(raw_path)
         if path.is_root:
             raise InvalidPathError("A file path is required, not the Drive root.")
-        if len(data) > self._config.max_file_bytes:
+        ceiling = self._config.max_file_bytes
+        if ceiling and len(data) > ceiling:
             raise TooLargeError(
-                f"Refusing to upload {len(data)} bytes; the limit is {self._config.max_file_bytes}. "
-                "Raise ICLOUD_MAX_FILE_BYTES on the server to allow it."
+                f"Refusing to upload {len(data)} bytes; the limit is {ceiling}. "
+                "Set ICLOUD_MAX_FILE_BYTES to 0 for no limit, or raise it."
             )
         name = validate_name(path.name)
 

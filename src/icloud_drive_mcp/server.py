@@ -21,7 +21,7 @@ from pydantic import Field
 from .config import Config
 from .drive import DriveClient, translate_exception
 from .errors import ICloudMCPError
-from .local_signin import SESSION_TTL_SECONDS, LocalSignInServer
+from .local_signin import LocalSignInServer
 from .oauth import SCOPE, OwnerPasswordOAuthProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -321,33 +321,68 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
     # Referenced so linters see the registrations as used.
     @mcp.tool(
         name="icloud_sign_in",
-        title="Sign in to iCloud",
+        title="Sign in to iCloud Drive",
         description=(
-            "Open a sign-in page on the user's own computer to connect their Apple account, "
-            "or reconnect it after the roughly 30-day session expires. Returns a URL for the "
-            "user to open in their browser; they enter their Apple ID password and the "
-            "six-digit code there. Never ask for the password in the conversation, and never "
-            "try to submit this form yourself."
+            "Connect or reconnect the user's Apple account so the other iCloud tools work. "
+            "Use this whenever they ask to log in, sign in, connect, reconnect, or authorise "
+            "iCloud or iCloud Drive, and whenever another tool reports the session has "
+            "expired or was never set up. Opens a sign-in page on the user's own computer and "
+            "waits for them to finish, then reports the outcome. Never ask for their Apple "
+            "password in the conversation and never try to fill the form yourself."
         ),
         annotations=additive,
     )
-    async def icloud_sign_in() -> dict[str, Any]:
+    async def icloud_sign_in(
+        wait_seconds: Annotated[
+            int,
+            Field(
+                description="How long to wait for the user to finish before returning. "
+                "0 returns the link immediately.",
+                ge=0,
+                le=600,
+            ),
+        ] = 240,
+    ) -> dict[str, Any]:
         server = _signin_server(config, client)
         url = await anyio.to_thread.run_sync(server.start)
-        return {
+        opened = {
             "sign_in_url": url,
-            "expires_in_seconds": SESSION_TTL_SECONDS,
-            "instructions": (
-                "Give the user this link and ask them to open it in a browser on this "
-                "computer. The page asks for their Apple ID password and then a six-digit "
-                "code from a trusted Apple device. Their password goes straight to Apple and "
-                "never reaches this conversation. Once they say they are done, call "
-                "icloud_session_status to confirm."
+            "tell_the_user": (
+                f"Open {url} in a browser on this computer. It is a page served by this "
+                "software on your own machine — 'localhost' means your computer, so nothing "
+                "you type there crosses the internet except to Apple. Enter your Apple ID "
+                "password, then the six-digit code Apple sends to your devices."
             ),
             "note": (
                 "An app-specific password will not work; Apple requires the account's real "
                 "password for iCloud Drive."
             ),
+        }
+        if wait_seconds == 0:
+            opened["status"] = "waiting"
+            opened["next_step"] = "Call icloud_session_status once the user says they are done."
+            return opened
+
+        # Show the link, then hold the call open so the conversation gets a real
+        # answer instead of going silent while the user is in their browser.
+        result = await anyio.to_thread.run_sync(server.wait_for_result, float(wait_seconds))
+        if result is None:
+            opened["status"] = "timed_out"
+            opened["next_step"] = (
+                "The wait ended before sign-in completed. If the user has finished, call "
+                "icloud_session_status. If the link expired, call icloud_sign_in again."
+            )
+            return opened
+
+        return {
+            "status": "connected",
+            "apple_id": result.get("apple_id"),
+            "items_at_top_level": result.get("root_entry_count"),
+            "session_expires": (
+                "In about 30 days. Apple sets that limit and provides no way to extend it "
+                "without a new verification code."
+            ),
+            "tell_the_user": "iCloud Drive is connected and ready to use.",
         }
 
     _ = (

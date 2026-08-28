@@ -41,7 +41,9 @@ def _get(url: str) -> tuple[int, str, dict[str, str]]:
 def test_binds_to_loopback_only(signin):
     url = signin.start()
     parsed = urllib.parse.urlparse(url)
-    assert parsed.hostname == "127.0.0.1"
+    # "localhost" rather than a bare IP: same address, but a raw 127.0.0.1 link
+    # with a random token reads to people like a phishing attempt.
+    assert parsed.hostname == "localhost"
     assert parsed.port and parsed.port > 0
     # An ephemeral port, never a fixed one another process could squat.
     assert parsed.port != 80
@@ -115,3 +117,35 @@ def test_wrong_password_does_not_echo_the_password_back(signin):
 def test_session_ttl_is_bounded():
     # Long enough to fetch a code, short enough not to linger.
     assert 300 <= SESSION_TTL_SECONDS <= 1800
+
+
+def test_sign_in_page_states_what_is_being_authorised(signin):
+    _, body, _ = _get(signin.start())
+    squashed = _squash(body)
+    # People deserve the list before they type a password, not after.
+    assert "What you are authorising" in squashed
+    assert "create, change, move and delete" in squashed
+    assert "never stored" in squashed
+    assert "No access to Mail, Photos, Contacts" in squashed
+
+
+def test_sign_in_page_says_the_page_is_local(signin):
+    _, body, _ = _get(signin.start())
+    assert "running on your own computer" in _squash(body)
+
+
+def test_pages_carry_the_glysk_mark(signin):
+    _, body, _ = _get(signin.start())
+    assert "GLYSK" in body
+    assert "<svg" in body
+
+
+def test_waiting_returns_none_when_nobody_signs_in(signin):
+    signin.start()
+    assert signin.wait_for_result(timeout=0.2) is None
+
+
+def test_waiting_returns_the_result_once_it_lands(signin):
+    signin.start()
+    signin._result = {"apple_id": "a@b.c", "root_entry_count": 3}
+    assert signin.wait_for_result(timeout=2)["apple_id"] == "a@b.c"

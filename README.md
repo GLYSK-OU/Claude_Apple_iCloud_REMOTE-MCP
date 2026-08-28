@@ -64,13 +64,26 @@ means:
 |---|---|
 | **You need** | The account's real Apple ID password, once, plus a 6-digit code from a trusted device |
 | **After that** | Apple issues a trust token, stored on the server; the password is not kept |
-| **Session life** | Roughly 30 days, then a human re-enters a fresh code |
+| **Session life** | Roughly 30 days, then a human re-enters a fresh code (see below) |
 | **Stability** | These are private endpoints. Apple can change them without notice, and this connector would break until `pyicloud` catches up |
 | **Terms** | Automated access to iCloud is not something Apple sanctions |
 
 If those trade-offs are not acceptable, there is no other way to reach iCloud
 Drive from a web session, and the honest answer is to use a provider with a real
 API (Dropbox, Google Drive, OneDrive) or run a local sync folder instead.
+
+### Why the session only lasts 30 days
+
+Because Apple says so. When you complete two-factor sign-in, Apple issues a
+*trust token* with its own expiry — roughly 30 days for the web endpoints this
+uses. Nothing here chooses that number, and there is no refresh call to extend
+it: Apple's design is that re-establishing trust requires a human with a
+trusted device. Any tool claiming to keep an iCloud session alive indefinitely
+is either storing your password to replay the whole login, which this
+deliberately does not do, or will break the same way.
+
+So the honest deal is: sign in once, use it for about a month, sign in again.
+Claude will tell you plainly when it lapses rather than retrying and failing.
 
 **Two things worth doing regardless:**
 
@@ -96,7 +109,7 @@ Ten tools, all paths POSIX-style and rooted at the top of iCloud Drive:
 | `icloud_move` | Move and/or rename in one call |
 | `icloud_delete` | To Recently Deleted by default; `permanent` opt-in |
 | `icloud_session_status` | Whether the Apple session is still alive |
-| `icloud_sign_in` | Open a local sign-in page to connect or reconnect Apple |
+| `icloud_sign_in` | Open a local sign-in page, and wait for you to finish |
 
 Safety behaviours worth knowing:
 
@@ -122,7 +135,7 @@ asks for:
 | **Apple ID** | The account whose Drive you want to use |
 | **Limit to folder** | Defaults to `/Claude`. Everything outside stays unreachable |
 | **Read-only** | Let Claude read but never change anything |
-| **Largest file (MB)** | Per-file transfer ceiling, 25 by default |
+| **Largest file (MB)** | Per-file ceiling. `0`, the default, means no limit |
 
 Note there is no password field. To sign in, ask Claude to connect iCloud — it
 calls `icloud_sign_in`, which opens a page **on your own computer** (loopback
@@ -331,7 +344,7 @@ install the plugin instead; it does this for you.)
 | `ICLOUD_SESSION_DIR` | `/data/icloud-session` | Where the trust token lives. Must persist |
 | `ICLOUD_ROOT_PATH` | whole Drive | Confine all tools to this folder |
 | `ICLOUD_READ_ONLY` | `false` | Refuse every write, move, and delete |
-| `ICLOUD_MAX_FILE_BYTES` | `26214400` | Per-file transfer ceiling |
+| `ICLOUD_MAX_FILE_BYTES` | `0` | Per-file ceiling in bytes. `0` means no limit |
 | `ICLOUD_PAGE_SIZE` | `50` | Default listing page size |
 | `PUBLIC_URL` | — | **Required for `http`.** Public HTTPS base URL, no trailing slash |
 | `MCP_GATE_PASSWORD` | — | Typed on the OAuth consent screen |
@@ -396,7 +409,7 @@ git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.g
   ~/Developer/iCloud_Drive_2_Claude_Connector
 cd ~/Developer/iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # expect: 122 passed
+.venv/bin/python -m pytest          # expect: 130 passed
 claude plugin validate .            # expect: Validation passed
 ```
 
@@ -451,7 +464,7 @@ so the connector cannot reach anything else.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 122 tests, no Apple account needed
+.venv/bin/python -m pytest        # 130 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 

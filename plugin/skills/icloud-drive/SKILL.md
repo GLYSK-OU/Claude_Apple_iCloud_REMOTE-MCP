@@ -33,9 +33,10 @@ as base64, with `encoding` telling you which happened. A `.docx`, `.pdf`, or
 prose. To work with the contents, write it to a local temp file first and use
 the matching document skill.
 
-Large files are refused rather than truncated. If you hit that limit, say so
-rather than retrying with a smaller `max_bytes`, which only moves the ceiling
-for the check and still refuses.
+There is no size limit unless the operator set one. If a read is refused for
+size, say so rather than retrying with a smaller `max_bytes` — that only moves
+the ceiling for the check and still refuses. Very large files may still be
+impractical to bring into a conversation whole.
 
 ## Writing
 
@@ -73,7 +74,8 @@ one works.
 
 Run `icloud_session_status` to confirm, then tell the user to re-authenticate:
 
-- Plugin (local): `/icloud-drive:setup`
+- Desktop or any client with tools: call `icloud_sign_in`
+- Claude Code plugin: `/icloud-drive:setup`
 - Self-hosted server: its `/admin/login` page, or `icloud-drive-mcp login` on
   the host
 

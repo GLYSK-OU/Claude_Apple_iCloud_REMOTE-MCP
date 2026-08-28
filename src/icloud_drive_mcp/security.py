@@ -155,3 +155,15 @@ SECURITY_HEADERS = {
     ),
     "Cache-Control": "no-store",
 }
+
+# The loopback sign-in pages use a few lines of inline script to move focus
+# between the six code boxes. They serve no external content, are reachable
+# only from this machine, and die within minutes, so allowing their own inline
+# script is a far smaller concession than it would be on a hosted page.
+LOCAL_PAGE_HEADERS = {
+    **SECURITY_HEADERS,
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+        "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    ),
+}

@@ -242,3 +242,40 @@ def test_unconfigured_status_reports_setup_guidance(tmp_path):
     assert status["authenticated"] is False
     assert "/icloud-drive:setup" in status["error"]
     assert "expired" not in status["error"]
+
+
+def test_zero_max_file_bytes_means_no_limit(config, monkeypatch):
+    """People store what they like; a ceiling is opt-in, not a default."""
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    unlimited = DriveClient(replace(config, max_file_bytes=0))
+    tree = build_tree()
+    monkeypatch.setattr(unlimited, "_connect", lambda: FakeAPI(tree))
+
+    big = b"x" * 200_000
+    unlimited.write_file("/Documents/big.bin", big, overwrite=True)
+    data, _ = unlimited.read_file("/Documents/big.bin")
+    assert data == big
+
+
+def test_an_explicit_ceiling_is_still_enforced(config, monkeypatch):
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    capped = DriveClient(replace(config, max_file_bytes=100))
+    monkeypatch.setattr(capped, "_connect", lambda: FakeAPI(build_tree()))
+    with pytest.raises(TooLargeError):
+        capped.write_file("/Documents/big.bin", b"x" * 200, overwrite=True)
+
+
+def test_default_config_has_no_size_ceiling():
+    from icloud_drive_mcp.config import Config
+
+    assert Config().max_file_bytes == 0
