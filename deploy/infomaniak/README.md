@@ -82,6 +82,33 @@ The `icloud-mcp-data` volume holds the Apple session and the registered OAuth
 clients. Losing it only means signing in again, so like `ats-mcp-state` it is
 deliberately **not** in the restic set.
 
+## Footprint on the VPS
+
+File contents pass through this container in full — Apple to here to Anthropic
+on a read, and back the other way on a write. Nothing is kept: files live in
+memory for the seconds of the transfer, and the only things on disk are the
+Apple session and the OAuth registrations.
+
+Measured, not estimated:
+
+| | |
+|---|---|
+| Idle | ~71 MB |
+| Peak, largest permitted read (10 MB file) | ~118 MB |
+| Growth over idle | ~47 MB |
+
+Two things keep that a ceiling rather than a per-request cost:
+
+- **Operations are serialised.** `pyicloud` is not thread-safe, so one Drive
+  operation runs at a time. Ten simultaneous requests queue; they do not
+  multiply the memory.
+- **Both directions are capped.** Reads by `ICLOUD_MAX_READ_BYTES` (10 MiB),
+  writes by the MCP transport's own 4 MB request-body limit.
+
+The container is additionally held to `mem_limit: 512m`, roughly four times the
+measured peak. If anything here ever misbehaves, the kernel kills this
+container and CouchDB, the vault connector, ats-mcp and Glances carry on.
+
 ## Traps already paid for
 
 These come from the sibling deployments; the scripts here account for them.

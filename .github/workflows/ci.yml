@@ -194,7 +194,10 @@ jobs:
         run: |
           rendered=$(docker compose -f deploy/infomaniak/docker-compose.yml config)
           # Compose normalises values, so match the rendered form, not the source.
-          for required in 'user: 10001:10001' 'read_only: true' 'no-new-privileges:true'; do
+          # A hard memory ceiling matters as much as the other hardening: it is
+          # what keeps a runaway read inside this container instead of starving
+          # the sibling services on the same box.
+          for required in 'user: 10001:10001' 'read_only: true' 'no-new-privileges:true' 'mem_limit'; do
             echo "$rendered" | grep -q "$required" || {
               echo "compose lost: $required"; exit 1; }
           done
