@@ -153,12 +153,15 @@ for you.
 /plugin install icloud-drive@glysk
 ```
 
-`marketplace add` reads the repository's **default branch**, so that one-liner
-only works once this is merged to `main`. To try it from a feature branch,
-clone the branch and point the marketplace at the checkout:
+`/plugin` is a **Claude Code** command — Claude Desktop does not have it. In
+Claude Desktop, install the desktop extension above instead. `marketplace add`
+also reads the repository's **default branch**, so the one-liner only works
+once `Alpha` is merged to `main`. To try it from a feature branch,
+clone `Alpha` and point the marketplace at the checkout:
 
 ```bash
-git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
+git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
+  ~/Developer/iCloud_Drive_2_Claude_Connector
 ```
 ```
 /plugin marketplace add ./iCloud_Drive_2_Claude_Connector
@@ -205,8 +208,9 @@ The server needs a public HTTPS URL for Claude on the web to reach it, and a
 persistent volume so the Apple session survives restarts.
 
 ```bash
-git clone https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
-cd iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
+  ~/Developer/iCloud_Drive_2_Claude_Connector
+cd ~/Developer/iCloud_Drive_2_Claude_Connector
 cp .env.example .env
 ```
 
@@ -372,8 +376,9 @@ Three levels, cheapest first. The first two need no Apple account.
 ### 1. The plumbing, offline (2 minutes)
 
 ```bash
-git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
-cd iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
+  ~/Developer/iCloud_Drive_2_Claude_Connector
+cd ~/Developer/iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest          # expect: 122 passed
 claude plugin validate .            # expect: Validation passed

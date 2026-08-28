@@ -3,9 +3,27 @@
 Thanks for looking. This project talks to a private Apple API on behalf of
 people's personal files, so the bar for changes is a little higher than usual.
 
+## Branches
+
+Two, and only two:
+
+- **`Alpha`** — where development happens. Every change lands here first.
+- **`main`** — what is released. Changes reach it by pull request from `Alpha`,
+  never by a direct push.
+
+No long-lived feature branches. A change big enough to want isolation is big
+enough to discuss first.
+
 ## Getting set up
 
+Clone into your development directory — on this project's primary machine that
+is `~/Developer/`:
+
 ```bash
+git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
+  ~/Developer/iCloud_Drive_2_Claude_Connector
+cd ~/Developer/iCloud_Drive_2_Claude_Connector
+
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest        # 100 tests, no Apple account needed
 .venv/bin/ruff check src tests
