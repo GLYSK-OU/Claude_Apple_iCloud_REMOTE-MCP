@@ -103,7 +103,16 @@ def build_server(
         )
 
     mcp = MCPServer(
-        name="apple-icloud",
+        # `name` shares one namespace with every connector the user has
+        # installed, and it is what a client keys tools by. An earlier rename
+        # to the bare "apple-icloud" collided with a different Apple connector
+        # already on the account: the client resolved the name to that one, and
+        # this connector looked broken through five disconnect-and-re-register
+        # cycles, none of which could have helped.
+        #
+        # So: distinctive, and matching the naming this account already uses
+        # for its own connectors (ATS-WEB_MCP, Obsidian Vault-WEB_MCP).
+        name="Apple-iCloud_REMOTE-MCP",
         title="Claude \u21c4 Apple iCloud",
         version="0.1.0",
         instructions=INSTRUCTIONS,

@@ -527,3 +527,37 @@ def test_the_one_line_install_uses_a_raw_url_that_resolves():
     assert match, "the README must carry the one-line install"
     assert f"/GLYSK-OU/{REPO_NAME}/" in match.group(0)
     assert match.group(0).endswith("/main/install.sh"), "must point at a branch"
+
+
+# ------------------------------------------------- the server's own identifier
+
+
+SERVER_NAME = "Apple-iCloud_REMOTE-MCP"
+
+
+def test_the_server_has_its_own_distinct_name(config):
+    """`name` shares one namespace with every connector the user has installed.
+
+    A rename to the bare "apple-icloud" collided with a different Apple
+    connector already on the account. The client resolved the name to that one,
+    which looked exactly like this connector failing to load, and survived five
+    disconnect-and-re-register cycles because the connection was never the
+    problem. Generic names are not ours to take.
+    """
+    from icloud_drive_mcp.server import build_server
+
+    mcp, _client, _provider = build_server(config, with_auth=False)
+
+    assert mcp.name == SERVER_NAME
+    assert mcp.name != "apple-icloud", "that name belonged to another connector"
+
+
+def test_the_name_is_an_identifier_and_the_title_carries_the_branding(config):
+    """`title` is what a UI shows and may change freely. `name` is what clients
+    key tools by, so it has to stay stable and must not contain spaces."""
+    from icloud_drive_mcp.server import build_server
+
+    mcp, _client, _provider = build_server(config, with_auth=False)
+
+    assert " " not in mcp.name
+    assert "Apple iCloud" in (mcp.title or "")
