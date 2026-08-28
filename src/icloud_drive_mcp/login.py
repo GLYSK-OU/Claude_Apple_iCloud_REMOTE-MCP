@@ -130,6 +130,65 @@ def _log_two_factor_route(api: PyiCloudService) -> None:
         LOGGER.debug("Could not log the two-factor route: %s", exc)
 
 
+def _ensure_a_code_was_requested(api: PyiCloudService) -> str | None:
+    """Request a code only if `pyicloud` did not already do it.
+
+    `pyicloud` detects Apple's 2FA challenge on two different paths, and asks
+    for a code on only one of them.
+
+    `_authenticate()` tries `_authenticate_with_token()`, then falls back to
+    `_srp_authentication()` followed by `_authenticate_with_token()` again.
+    Inside `_srp_authentication`, a `POST /signin/complete` that raises
+    2FA-required is handled properly: it fetches Apple's auth options into
+    `_auth_data` and calls `_request_2fa_code()`, pushing to trusted devices
+    and requesting an SMS where possible.
+
+    But when `signin/complete` *succeeds* and the account still is not a
+    trusted session, the challenge surfaces later, from `accountLogin` inside
+    `_authenticate_with_token`. `authenticate()` catches that one and only
+    sets `_requires_mfa = True`. Nothing fetches the auth options, and nothing
+    asks Apple for a code — so none is ever sent, and none ever arrives.
+
+    `_auth_data` tells the two apart exactly: it is populated on the path that
+    requested a code and empty on the path that did not. Requesting on both
+    would send the user two codes; requesting on neither is the bug we hit.
+
+    Returns a notice for the code page when the request could not be made.
+    """
+    try:
+        already_requested = bool(getattr(api, "_auth_data", None))
+    except Exception:  # noqa: BLE001 - never let a probe break sign-in
+        already_requested = False
+
+    if already_requested:
+        LOGGER.info("pyicloud already requested a code during the password step.")
+        return None
+
+    LOGGER.info("No code was requested during the password step; requesting one now.")
+    try:
+        api._auth_data = api._get_mfa_auth_options()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Could not read Apple's two-factor options: %s", exc)
+        return (
+            f"Could not read the two-factor options from Apple ({exc}). Use Send a new code, "
+            "or enter a code if one reached your devices."
+        )
+
+    try:
+        if not _ask_apple_again(api):
+            return (
+                "Apple offered no route to send a code automatically. If a prompt reached one "
+                "of your Apple devices, enter that code below; otherwise use Send a new code."
+            )
+    except Exception as exc:  # noqa: BLE001 - the password was accepted; never bounce back
+        LOGGER.warning("Requesting the two-factor code failed: %s", exc)
+        return (
+            f"Apple reported a problem sending the code ({exc}). If a code did arrive on your "
+            "devices, enter it below; otherwise use Send a new code."
+        )
+    return None
+
+
 def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | None:
     """Do the password step. Returns None when no 2FA code is needed."""
     if not apple_id:
@@ -165,22 +224,14 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
             "attached rather than using this page."
         )
 
-    # The password has been accepted and Apple wants a code.
-    #
-    # Do NOT ask for a code here. `pyicloud` already did, inside the constructor
-    # above: `_authenticate_with_credentials` catches Apple's 2FA challenge and
-    # calls its private `_request_2fa_code()`, which pushes to the trusted
-    # devices (GET /verify/trusteddevice) and requests an SMS when a trusted
-    # number exists. By the time we get here the code is already in flight.
-    #
-    # Calling the *public* `request_2fa_code()` on top of that is what made
-    # Apple send a second code. It is also a different route — the newer HSA2
-    # bridge — which simply returns False on an account whose boot context does
-    # not offer `auth/bridge/step`, so it would report a scary "Apple declined"
-    # for a code that had in fact already been sent.
+    # The password has been accepted and Apple wants a code. Ask for one only
+    # if `pyicloud` has not already done so — see the helper for how the two
+    # cases are told apart. Whatever happens, hand back a pending login:
+    # bouncing to the password form is what earns the user a second code.
+    pending_notice = _ensure_a_code_was_requested(api)
     _log_two_factor_route(api)
 
-    pending_notice = getattr(api, "two_factor_delivery_notice", None)
+    pending_notice = pending_notice or getattr(api, "two_factor_delivery_notice", None)
     pending = PendingLogin(
         api=api,
         apple_id=apple_id,

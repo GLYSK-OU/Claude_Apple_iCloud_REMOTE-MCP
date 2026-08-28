@@ -363,7 +363,12 @@ def test_code_is_read_the_same_way_by_both_flows():
 
 
 class _FakeAPI2FA:
-    """An Apple client that wants a code and misbehaves while sending it."""
+    """An Apple client on the path where pyicloud already requested a code.
+
+    `_auth_data` populated is the marker: `_srp_authentication` fetched
+    Apple's auth options and called `_request_2fa_code()`. Asking again here
+    is what sent the user a second code.
+    """
 
     requires_2fa = True
     requires_2sa = False
@@ -376,6 +381,12 @@ class _FakeAPI2FA:
         self._on_request = on_request or (lambda: True)
         self.requests = 0
         self.push_requests = 0
+        self.options_reads = 0
+        self._auth_data = {"mode": "sms", "hasTrustedDevices": True}
+
+    def _get_mfa_auth_options(self):
+        self.options_reads += 1
+        return {"mode": "sms", "hasTrustedDevices": True}
 
     def request_2fa_code(self):
         """The newer HSA2 *bridge* route."""
@@ -385,6 +396,20 @@ class _FakeAPI2FA:
     def _request_2fa_code(self):
         """The push+SMS route pyicloud itself uses during sign-in."""
         self.push_requests += 1
+
+
+class _FakeAPINeverRequested(_FakeAPI2FA):
+    """The live account's shape: 2FA detected where pyicloud never asks.
+
+    `signin/complete` succeeded, so the challenge surfaced later from
+    `accountLogin` inside `_authenticate_with_token`. `authenticate()` catches
+    that and only sets `_requires_mfa`. `_auth_data` stays empty and no code
+    is ever sent.
+    """
+
+    def __init__(self, on_request=None):
+        super().__init__(on_request)
+        self._auth_data = {}
 
 
 @pytest.mark.parametrize(
@@ -424,6 +449,52 @@ def test_the_password_step_does_not_invent_a_delivery_failure(config, monkeypatc
 
     pending = login.start_login(config, "a@b.c", "pw")
     assert not pending.notice, "nothing failed, so the code page must not cry wolf"
+
+
+def test_a_code_is_requested_when_pyicloud_never_did(config, monkeypatch):
+    """The live account's failure: 2FA required, but nothing ever sent.
+
+    pyicloud only requests a code on the `signin/complete` path. When the
+    challenge surfaces from `accountLogin` instead, `_auth_data` is empty and
+    no code was requested — so we must request one ourselves.
+    """
+    from icloud_drive_mcp import login
+
+    api = _FakeAPINeverRequested()
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    pending = login.start_login(config, "a@b.c", "pw")
+
+    assert pending is not None
+    assert api.options_reads == 1, "Apple's two-factor options must be fetched first"
+    assert api.requests == 1, "a code must actually be requested"
+    assert not pending.notice, "the request succeeded, so say nothing alarming"
+
+
+def test_the_request_falls_back_when_the_bridge_is_not_offered(config, monkeypatch):
+    """The live account is not on the bridge route."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPINeverRequested(lambda: False)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    login.start_login(config, "a@b.c", "pw")
+
+    assert api.push_requests == 1, "the push+SMS route must be tried"
+
+
+def test_a_failure_to_request_still_reaches_the_code_page(config, monkeypatch):
+    """Bouncing back to the password form is what earns a second code."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPINeverRequested()
+    api._get_mfa_auth_options = lambda: (_ for _ in ()).throw(RuntimeError("421"))
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    pending = login.start_login(config, "a@b.c", "pw")
+
+    assert pending is not None
+    assert pending.notice, "the user must be told the request could not be made"
 
 
 def test_a_security_key_account_is_still_refused(config, monkeypatch):
