@@ -365,3 +365,60 @@ def test_a_whole_file_read_is_never_marked_truncated(client):
     data, info = client.read_file("/Documents/notes.md")
     assert info.truncated is False
     assert data == b"# Notes\nhello"
+
+
+# --------------------------------- reusing a session must not need a writable HOME
+
+
+def test_a_keyring_backend_is_named_before_pyicloud_asks_for_one():
+    """`pyicloud` calls get_password_from_keyring() whenever a PyiCloudService
+    is built without a password — which is what reusing a stored session does.
+    `keyring` then writes $HOME/.config/python_keyring/keyringrc.cfg to settle
+    on a backend, and a read-only container answers EACCES, killing the
+    session. Sign-in never hits it, so this breaks only *after* a success.
+    """
+    import os
+
+    import icloud_drive_mcp  # noqa: F401 - importing is what sets the default
+
+    assert os.environ["PYTHON_KEYRING_BACKEND"] == "keyring.backends.null.Keyring"
+
+
+def test_the_named_backend_answers_without_touching_the_filesystem(tmp_path, monkeypatch):
+    """The point is not that it finds nothing — it is that it does not write."""
+    import keyring
+    import keyring.backends.null
+    import keyring.core
+
+    monkeypatch.setenv("HOME", str(tmp_path / "unwritable"))
+    monkeypatch.setattr(keyring.core, "get_keyring", keyring.backends.null.Keyring)
+
+    assert keyring.get_password("pyicloud", "someone@example.com") is None
+    assert not (tmp_path / "unwritable").exists(), "nothing may be written to HOME"
+
+
+def test_an_operator_choice_of_backend_is_respected(monkeypatch):
+    """setdefault, not set: someone who configured a real keyring keeps it."""
+    import importlib
+    import os
+
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    import icloud_drive_mcp
+
+    importlib.reload(icloud_drive_mcp)
+    assert os.environ["PYTHON_KEYRING_BACKEND"] == "keyring.backends.fail.Keyring"
+
+
+def test_the_image_names_the_backend_too():
+    """The code default protects any deployment; the image says so out loud."""
+    import pathlib
+
+    dockerfile = (pathlib.Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    assert "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" in dockerfile
+    assert "HOME=/home/icloud" in dockerfile
+
+    # A comment inside a line continuation is not valid Dockerfile syntax.
+    lines = dockerfile.split("\n")
+    for index, line in enumerate(lines[1:], start=1):
+        if line.lstrip().startswith("#"):
+            assert not lines[index - 1].rstrip().endswith("\\"), f"line {index + 1}"

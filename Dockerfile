@@ -24,10 +24,15 @@ VOLUME ["/data"]
 
 USER 10001:10001
 
+# Nothing here uses a keyring, but `pyicloud` asks one for a password whenever
+# a session is reused, and `keyring` writes a config file into HOME to settle on
+# a backend — which a read-only container refuses. Naming the backend skips that.
 ENV ICLOUD_SESSION_DIR=/data/icloud-session \
     OAUTH_STORE_PATH=/data/oauth-store.json \
     HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8000 \
+    HOME=/home/icloud \
+    PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 
 EXPOSE 8000
 
