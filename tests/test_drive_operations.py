@@ -331,3 +331,37 @@ def test_default_read_ceiling_is_set_but_storage_is_not():
 
     assert Config().max_file_bytes == 0
     assert Config().max_read_bytes > 0
+
+
+def test_head_read_samples_a_file_too_big_to_return(config, monkeypatch):
+    """A 2 GB file cannot come back whole by any route. It can still be looked at."""
+    from dataclasses import replace
+
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, FakeNode, build_tree
+
+    tree = build_tree()
+    docs = tree.get_children()[0]
+    docs.children.append(FakeNode("huge.bin", "file", b"HEADER!!" + b"x" * 500_000, parent=docs))
+
+    client = DriveClient(replace(config, max_read_bytes=1000))
+    monkeypatch.setattr(client, "_connect", lambda: FakeAPI(tree))
+
+    # Whole-file read is refused, as it should be.
+    with pytest.raises(TooLargeError):
+        client.read_file("/Documents/huge.bin")
+
+    # A head read succeeds and says it is partial.
+    data, info = client.read_file("/Documents/huge.bin", max_bytes=64, head=True)
+    assert data.startswith(b"HEADER!!")
+    assert len(data) == 64
+    assert info.truncated is True
+    assert info.bytes_returned == 64
+    assert info.size == 500_008
+
+
+def test_a_whole_file_read_is_never_marked_truncated(client):
+    data, info = client.read_file("/Documents/notes.md")
+    assert info.truncated is False
+    assert data == b"# Notes\nhello"

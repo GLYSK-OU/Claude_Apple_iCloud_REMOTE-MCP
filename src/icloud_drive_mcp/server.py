@@ -165,7 +165,8 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
         description=(
             "Download one file and return its contents. Text files come back as text; "
             "anything that is not valid UTF-8 comes back base64-encoded, with 'encoding' "
-            "saying which happened. Large files are refused rather than truncated."
+            "saying which happened. A file too large to return is refused rather than "
+            "silently truncated — set head_bytes to sample the beginning of it instead."
         ),
         annotations=read_only,
     )
@@ -178,14 +179,35 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
         force_base64: Annotated[
             bool, Field(description="Return base64 even when the file is valid UTF-8 text.")
         ] = False,
+        head_bytes: Annotated[
+            int,
+            Field(
+                description="Return only the first N bytes and stop the download there. "
+                "Use this to inspect a file too big to return whole — a header, a sample, "
+                "the first rows of a CSV. 0 reads the whole file.",
+                ge=0,
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
-        data, info = await _run(client.read_file, path, max_bytes or None)
+        data, info = await _run(
+            client.read_file,
+            path,
+            head_bytes or max_bytes or None,
+            bool(head_bytes),
+        )
         payload: dict[str, Any] = {
             "path": info.path,
             "name": info.name,
             "size": len(data),
             "modified": info.modified,
         }
+        if info.truncated:
+            payload["truncated"] = True
+            payload["file_size"] = info.size
+            payload["note"] = (
+                f"Only the first {len(data)} bytes of {info.size} were read. The rest was "
+                "not downloaded. Say so rather than treating this as the whole file."
+            )
         if not force_base64:
             try:
                 payload["encoding"] = "utf-8"

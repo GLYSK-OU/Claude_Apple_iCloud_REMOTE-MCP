@@ -19,7 +19,7 @@ import io
 import logging
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -72,6 +72,9 @@ class NodeInfo:
     changed: str | None
     etag: str | None
     docwsid: str | None
+    # Set when a read deliberately stopped short of the whole file.
+    truncated: bool = False
+    bytes_returned: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -299,7 +302,17 @@ class DriveClient:
                     info["child_count"] = None
         return info
 
-    def read_file(self, raw_path: str, max_bytes: int | None = None) -> tuple[bytes, NodeInfo]:
+    def read_file(
+        self, raw_path: str, max_bytes: int | None = None, head: bool = False
+    ) -> tuple[bytes, NodeInfo]:
+        """Download a file, or the first `max_bytes` of one.
+
+        `head=True` turns the size ceiling from a refusal into a stop: the
+        transfer is abandoned once enough bytes have arrived. That is what
+        makes a multi-gigabyte file inspectable — a header, a sample, the first
+        rows of a CSV — when returning the whole thing is impossible by any
+        route, the file being far larger than a context window.
+        """
         path = self._parse(raw_path)
         # Three ceilings can apply: what the caller asked for, the store-wide
         # one (0 = unlimited), and the read-back one. The tightest non-zero
@@ -316,7 +329,7 @@ class DriveClient:
                     f"'{self._display(path)}' is a folder. Use icloud_list_directory to see inside it."
                 )
             size = node.size or 0
-            if limit and size > limit:
+            if limit and size > limit and not head:
                 raise TooLargeError(
                     f"'{self._display(path)}' is {size} bytes, over the {limit} byte limit "
                     "for a single read. This limit is about returning the file through the "
@@ -324,6 +337,7 @@ class DriveClient:
                     "would be far larger than a context window. Ask for a smaller file, or "
                     "raise ICLOUD_MAX_READ_BYTES on the server if it really will fit."
                 )
+            truncated = False
             try:
                 with node.open(stream=True) as response:
                     buffer = io.BytesIO()
@@ -331,15 +345,23 @@ class DriveClient:
                         buffer.write(chunk)
                         # Apple's reported size can lag the real object, so stop
                         # on the way in as well as checking it beforehand.
-                        if limit and buffer.tell() > limit:
+                        if limit and buffer.tell() >= limit:
+                            if head:
+                                # Enough. Dropping the response here stops the
+                                # transfer rather than paying for the rest.
+                                truncated = True
+                                break
                             raise TooLargeError(
                                 f"'{self._display(path)}' exceeded the {limit} byte read limit "
                                 "while downloading, so the transfer was abandoned."
                             )
             except PyiCloudAPIResponseException as exc:
                 raise UpstreamError(f"iCloud refused the download of '{self._display(path)}': {exc}") from exc
-            info = self._info(node, path)
-        return bytes(buffer.getbuffer()), info
+            data = bytes(buffer.getbuffer())
+            if truncated and limit:
+                data = data[:limit]
+            info = replace(self._info(node, path), truncated=truncated, bytes_returned=len(data))
+        return data, info
 
     def search(
         self, query: str, raw_path: str, limit: int, max_depth: int, include_folders: bool

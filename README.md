@@ -105,7 +105,7 @@ Ten tools, all paths POSIX-style and rooted at the top of iCloud Drive:
 |---|---|
 | `icloud_list_directory` | List one folder, paged, folders first |
 | `icloud_get_metadata` | Type, size, dates for one item — no download |
-| `icloud_read_file` | Download a file; text as text, binary as base64 |
+| `icloud_read_file` | Download a file, or just its first bytes with `head_bytes` |
 | `icloud_search` | Find items by name, depth- and result-bounded |
 | `icloud_write_file` | Create or replace a file, text or base64 |
 | `icloud_create_directory` | Create a folder, optionally `mkdir -p` style |
@@ -371,6 +371,25 @@ The read ceiling is not policy — it is the size of the trip home. Raise it if
 you have the RAM and the file really will fit; a refusal says so explicitly
 rather than pretending the limit is about storage.
 
+### Very large files
+
+A 2 GB file encodes to roughly **700 million tokens**. It cannot enter a
+conversation by any route — not through this connector, not through a synced
+folder on a Mac. That is arithmetic rather than a limitation of the transport.
+
+What works on a file of any size, because **no content is transferred at all**:
+
+| | |
+|---|---|
+| List, search, check metadata | Only names and sizes travel |
+| Move, rename, delete, organise | Only the file's identifier and etag travel |
+| Sample the beginning | `head_bytes` stops the download once it has enough |
+
+So a 2 GB video can be found, renamed, filed into the right folder and deleted
+as fast as a text note. What it cannot be is *read out loud*. `head_bytes`
+covers the middle ground — enough to identify a format, read a header, or see
+a CSV's columns.
+
 **Concurrency.** `pyicloud` is not thread-safe, so every Drive operation is
 serialised on one lock: the server does one thing at a time and queues the
 rest. That is correct rather than fast. It suits one person's use comfortably
@@ -453,7 +472,7 @@ git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.g
   ~/Developer/iCloud_Drive_2_Claude_Connector
 cd ~/Developer/iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # expect: 137 passed
+.venv/bin/python -m pytest          # expect: 139 passed
 claude plugin validate .            # expect: Validation passed
 ```
 
@@ -508,7 +527,7 @@ so the connector cannot reach anything else.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 137 tests, no Apple account needed
+.venv/bin/python -m pytest        # 139 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 

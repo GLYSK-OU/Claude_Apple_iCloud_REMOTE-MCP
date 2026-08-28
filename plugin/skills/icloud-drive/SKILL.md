@@ -33,10 +33,23 @@ as base64, with `encoding` telling you which happened. A `.docx`, `.pdf`, or
 prose. To work with the contents, write it to a local temp file first and use
 the matching document skill.
 
-There is no size limit unless the operator set one. If a read is refused for
-size, say so rather than retrying with a smaller `max_bytes` — that only moves
-the ceiling for the check and still refuses. Very large files may still be
-impractical to bring into a conversation whole.
+**Large files.** A file's contents come back through the conversation, so a
+big one cannot arrive whole — a 2 GB file is roughly 700 million tokens
+encoded, against a context window of a couple of hundred thousand. That is
+arithmetic, not a setting, and no amount of retrying changes it.
+
+What to do instead:
+
+- To identify or sample it, pass `head_bytes` — the first few kilobytes are
+  usually enough for a file header, a CSV's columns, or the start of a log. The
+  result is marked `truncated`; say so rather than treating it as the whole
+  file.
+- To organise it — move, rename, delete, list — nothing needs downloading at
+  all. Those operations work on files of any size, instantly, because only the
+  file's identifier travels.
+
+If a read is refused for size, do not retry with a smaller `max_bytes`; that
+only lowers the ceiling for the check and still refuses. Use `head_bytes`.
 
 ## Writing
 
