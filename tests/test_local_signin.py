@@ -770,3 +770,100 @@ def test_discarding_is_safe_when_there_is_nothing_to_discard(config):
     from icloud_drive_mcp import login
 
     assert login.discard_session_files(config) == []
+
+
+# --------------------------- a correct code whose trust step failed is not a bad code
+
+
+class _FakeAPIVerify(_FakeAPI2FA):
+    """Models `validate_2fa_code`'s two indistinguishable False returns."""
+
+    def __init__(self, *, rejects_code: bool, trust_works: bool):
+        super().__init__()
+        self._rejects_code = rejects_code
+        self._trust_works = trust_works
+        self.trust_calls = 0
+        self.requires_2sa = True
+        self.is_trusted_session = False
+
+    def validate_2fa_code(self, code):
+        import logging as _logging
+
+        if self._rejects_code:
+            _logging.getLogger("pyicloud.base").error("Code verification failed.")
+            return False
+        # The real method logs success, then trusts, then returns
+        # `not self.requires_2sa` — discarding whether trust actually worked.
+        _logging.getLogger("pyicloud.base").debug("Code verification successful.")
+        self.trust_session()
+        return not self.requires_2sa
+
+    def trust_session(self):
+        self.trust_calls += 1
+        if not self._trust_works:
+            return False
+        self.requires_2sa = False
+        self.is_trusted_session = True
+        return True
+
+    @property
+    def drive(self):
+        class _Root:
+            def dir(self):
+                return ["a.txt"]
+
+        return type("D", (), {"root": _Root()})()
+
+
+def _pending(api):
+    from icloud_drive_mcp import login
+
+    return login.PendingLogin(api=api, apple_id="a@b.c", delivery_method="x", notice=None)
+
+
+def test_a_wrong_code_is_still_reported_as_a_wrong_code():
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIVerify(rejects_code=True, trust_works=False)
+    with pytest.raises(login.LoginError, match="not accepted"):
+        login.finish_login(_pending(api), "123456")
+
+
+def test_a_correct_code_is_not_blamed_when_the_trust_step_fails():
+    """The live symptom: the emailed code was right, the message said it wasn't."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIVerify(rejects_code=False, trust_works=False)
+    with pytest.raises(login.LoginError) as caught:
+        login.finish_login(_pending(api), "123456")
+
+    message = str(caught.value)
+    assert "not a problem with the digits" in message
+    assert "Check the digits" not in message, "never blame a code Apple accepted"
+
+
+def test_a_correct_code_recovers_when_the_trust_retry_succeeds():
+    """trust_session() does not need the code again, so retrying is free."""
+    from icloud_drive_mcp import login
+
+    class _FlakyTrust(_FakeAPIVerify):
+        def trust_session(self):
+            self.trust_calls += 1
+            if self.trust_calls == 1:
+                return False  # exactly what validate_2fa_code swallows
+            self.requires_2sa = False
+            self.is_trusted_session = True
+            return True
+
+    api = _FlakyTrust(rejects_code=False, trust_works=False)
+    result = login.finish_login(_pending(api), "123456")
+
+    assert api.trust_calls >= 2, "the trust step must be retried, not given up on"
+    assert result["trusted_session"] is True
+
+
+def test_the_code_is_normalised_before_use():
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIVerify(rejects_code=False, trust_works=True)
+    assert login.finish_login(_pending(api), " 123 456 ")["trusted_session"] is True

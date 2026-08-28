@@ -18,6 +18,8 @@ import secrets
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -362,6 +364,39 @@ def resend_code(pending: PendingLogin) -> str:
     return "Apple has been asked to send another code to your trusted devices."
 
 
+@contextmanager
+def _pyicloud_messages() -> Iterator[list[str]]:
+    """Collect what `pyicloud` logs during a call.
+
+    `validate_2fa_code` collapses two very different outcomes into one False,
+    and the only thing that tells them apart is what it logged on the way out.
+    Listening is cheap and read-only; reimplementing Apple's verification to
+    avoid it would not be.
+    """
+    messages: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                messages.append(record.getMessage())
+            except Exception:  # noqa: BLE001 - a log line may never break sign-in
+                pass
+
+    logger = logging.getLogger("pyicloud")
+    handler = _Collect()
+    previous = logger.level
+    logger.addHandler(handler)
+    # The distinguishing line is logged at DEBUG, so make sure it is emitted
+    # even when the process is running at INFO.
+    if previous > logging.DEBUG or previous == logging.NOTSET:
+        logger.setLevel(logging.DEBUG)
+    try:
+        yield messages
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
 def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
     """Exchange the 6-digit code for a trust token written to the session dir."""
     code = (code or "").strip().replace(" ", "").replace("-", "")
@@ -370,13 +405,43 @@ def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
 
     api = pending.api
     try:
-        valid = api.validate_2fa_code(code)
+        with _pyicloud_messages() as messages:
+            valid = api.validate_2fa_code(code)
     except PyiCloudTrustedDeviceVerificationException as exc:
         raise LoginError(f"Apple could not verify that code: {exc}") from exc
     except PyiCloudAPIResponseException as exc:
         raise LoginError(f"Apple rejected the verification: {exc}") from exc
+
+    # `validate_2fa_code` ends with:
+    #
+    #     LOGGER.debug("Code verification successful.")
+    #     self.trust_session()
+    #     return not self.requires_2sa
+    #
+    # `trust_session()` swallows its own failure and its return value is
+    # discarded, so a *correct* code whose trust step failed comes back False
+    # and reads exactly like a wrong one. Only the log tells them apart.
+    code_rejected = any("Code verification failed" in line for line in messages)
+    if not valid and not code_rejected:
+        LOGGER.warning(
+            "Apple verified the code but the session did not come back trusted. "
+            "Retrying the trust step, which does not need the code again."
+        )
+        try:
+            api.trust_session()
+        except Exception as exc:  # noqa: BLE001 - fall through to the message below
+            LOGGER.warning("Retrying the trust step failed: %s", exc)
+        valid = not api.requires_2sa
+
     if not valid:
-        raise LoginError("That code was not accepted. Check the digits and try again.")
+        if code_rejected:
+            raise LoginError("That code was not accepted. Check the digits and try again.")
+        raise LoginError(
+            "Apple accepted that code, but would not mark this session as trusted, so the "
+            "sign-in could not be completed. This is not a problem with the digits you "
+            "entered. Try signing in once more; if it repeats, the stored session may need "
+            "clearing."
+        )
 
     if not api.is_trusted_session:
         api.trust_session()
