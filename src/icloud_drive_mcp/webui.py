@@ -87,6 +87,46 @@ _PAGE = """<!doctype html>
   p {{ margin: 0 0 16px; color: var(--muted); font-size: 14px; }}
   p.lead {{ color: var(--ink); }}
   label {{ display: block; font-size: 12.5px; font-weight: 600; margin: 16px 0 6px; }}
+
+  /* ---- service picker ---------------------------------------------- */
+  .svc {{ list-style:none; padding:0; margin:14px 0 0; }}
+  .svc li {{ display:flex; align-items:flex-start; gap:12px; padding:11px 2px;
+             border-bottom:1px solid var(--hair); }}
+  .svc li:last-child {{ border-bottom:0; }}
+  .svc .ico {{ flex:0 0 30px; width:30px; height:30px; border-radius:7px;
+               display:grid; place-items:center; font-size:16px; line-height:1;
+               background:var(--paper); }}
+  .svc .txt {{ flex:1 1 auto; min-width:0; }}
+  .svc .nm {{ font-weight:600; font-size:14px; }}
+  .svc .ds {{ font-size:12.5px; color:var(--muted); margin-top:2px; }}
+  .svc .off .nm, .svc .off .ds {{ color:var(--muted); }}
+  .svc .off .ico {{ opacity:.4; }}
+  /* An iOS switch, built from a checkbox so it works with no JavaScript. */
+  .sw {{ flex:0 0 auto; position:relative; width:46px; height:28px; margin-top:2px; }}
+  .sw input {{ position:absolute; inset:0; opacity:0; margin:0; cursor:pointer; }}
+  .sw span {{ position:absolute; inset:0; border-radius:999px; background:#d6d6da;
+              transition:background .18s ease; pointer-events:none; }}
+  .sw span::after {{ content:""; position:absolute; top:2px; left:2px; width:24px; height:24px;
+                     border-radius:50%; background:#fff; transition:transform .18s ease;
+                     box-shadow:0 1px 3px rgba(0,0,0,.28); }}
+  .sw input:checked + span {{ background:#34c759; }}
+  .sw input:checked + span::after {{ transform:translateX(18px); }}
+  .sw input:focus-visible + span {{ outline:2px solid var(--brand); outline-offset:2px; }}
+  .sw input:disabled {{ cursor:not-allowed; }}
+  .sw input:disabled + span {{ background:#e6e6ea; }}
+  .sw input:disabled + span::after {{ box-shadow:none; opacity:.6; }}
+  .locked {{ font-size:11px; color:var(--muted); border:1px solid var(--hair);
+             border-radius:999px; padding:3px 9px; white-space:nowrap; margin-top:5px; }}
+  .allbar {{ display:flex; align-items:center; justify-content:space-between; gap:12px;
+             padding:13px 14px; border:1px solid var(--hair); border-radius:12px;
+             background:var(--paper); margin-top:16px; }}
+  .allbar .nm {{ font-weight:650; font-size:14px; }}
+  .allbar .ds {{ font-size:12.5px; color:var(--muted); margin-top:2px; }}
+  @media (prefers-color-scheme: dark) {{
+    .sw span {{ background:#3a3a3c; }}
+    .sw input:disabled + span {{ background:#2c2c2e; }}
+  }}
+
   input[type=email], input[type=password], input[type=text] {{
     width: 100%; padding: 11px 13px; font-size: 16px; font-family: inherit;
     border: 1px solid var(--hair); border-radius: 10px;
@@ -276,12 +316,123 @@ _CODE_SCRIPT = """<script>
 </script>"""
 
 
-def signin_password_page(apple_id: str, action: str, message: str = "", local: bool = False) -> HTMLResponse:
+# Apple's own glyphs are trademarks and are not ours to ship, so each service
+# gets a plain emoji that reads at a glance. Recognisable, unambiguous, and
+# nobody's intellectual property to borrow.
+SERVICE_ICONS: dict[str, str] = {
+    "drive": "\u2601\ufe0f",
+    "photos": "\U0001f33a",
+    "calendar": "\U0001f4c5",
+    "reminders": "\u2611\ufe0f",
+    "contacts": "\U0001f465",
+    "notes": "\U0001f4dd",
+    "devices": "\U0001f4cd",
+    "hidemyemail": "\U0001f3ad",
+    "account": "\u2699\ufe0f",
+    "files": "\U0001f4c4",
+    "invites": "\u2709\ufe0f",
+    "mail": "\u2709\ufe0f",
+    "messages": "\U0001f4ac",
+    "keychain": "\U0001f511",
+    "wallet": "\U0001f4b3",
+    "health": "\u2764\ufe0f",
+    "music": "\U0001f3b5",
+    "tv": "\U0001f4fa",
+    "news": "\U0001f4f0",
+    "arcade": "\U0001f579\ufe0f",
+}
+
+
+def service_picker(granted: frozenset[str] | None = None) -> str:
+    """The Apple-style switch list for choosing what Claude may reach.
+
+    Signing in to Apple hands over one un-scoped session. This is where that
+    becomes a decision instead of a side effect: everything is off but Drive
+    until someone turns it on, and the switches are the grant, not a
+    preference the code may later ignore.
+
+    Services this build cannot reach are shown anyway, switched off and
+    disabled with the reason beside them. Hiding them would leave a reader to
+    assume Wallet and Messages were quietly included.
+    """
+    from .services import AVAILABLE, DRIVE, UNAVAILABLE
+
+    granted = granted if granted is not None else frozenset({DRIVE})
+    rows: list[str] = []
+
+    for service in AVAILABLE:
+        icon = SERVICE_ICONS.get(service.key, "\u2022")
+        checked = " checked" if service.key in granted else ""
+        # Drive is why the connector exists; turning it off leaves nothing.
+        fixed = service.key == DRIVE
+        control = (
+            f'<input type="checkbox" name="services" value="{html.escape(service.key)}" '
+            f'aria-label="{html.escape(service.name)}"{checked}'
+            f"{' disabled' if fixed else ''}>"
+        )
+        hidden = f'<input type="hidden" name="services" value="{html.escape(DRIVE)}">' if fixed else ""
+        rows.append(
+            f'<li><span class="ico" aria-hidden="true">{icon}</span>'
+            f'<span class="txt"><span class="nm">{html.escape(service.name)}</span>'
+            f'<span class="ds">{html.escape(service.summary)}</span></span>'
+            f'<label class="sw">{control}<span></span></label>{hidden}</li>'
+        )
+
+    for service in UNAVAILABLE:
+        icon = SERVICE_ICONS.get(service.key, "\u2022")
+        rows.append(
+            f'<li class="off"><span class="ico" aria-hidden="true">{icon}</span>'
+            f'<span class="txt"><span class="nm">{html.escape(service.name)}</span>'
+            f'<span class="ds">{html.escape(service.unavailable_because)}</span></span>'
+            f'<span class="locked">Not available</span></li>'
+        )
+
+    return f"""
+      <div class="allbar">
+        <span><span class="nm">Everything above</span>
+        <span class="ds">Turns on every service this connector can reach.</span></span>
+        <label class="sw"><input type="checkbox" id="all" aria-label="Select every service">
+        <span></span></label>
+      </div>
+      <ul class="svc">{"".join(rows)}</ul>
+    """
+
+
+_PICKER_SCRIPT = """
+(function () {
+  var all = document.getElementById('all');
+  if (!all) return;
+  var boxes = Array.prototype.slice.call(
+    document.querySelectorAll('.svc input[type=checkbox]:not([disabled])')
+  );
+  function sync() {
+    all.checked = boxes.length > 0 && boxes.every(function (b) { return b.checked; });
+  }
+  all.addEventListener('change', function () {
+    boxes.forEach(function (b) { b.checked = all.checked; });
+  });
+  boxes.forEach(function (b) { b.addEventListener('change', sync); });
+  sync();
+})();
+"""
+
+
+def signin_password_page(
+    apple_id: str,
+    action: str,
+    message: str = "",
+    local: bool = False,
+    granted: frozenset[str] | None = None,
+) -> HTMLResponse:
     """The first sign-in screen, shared by the local and hosted flows.
 
     One page rather than two: this is where someone decides to hand over an
     Apple password, and it should say the same things wherever it is served
     from.
+
+    It is also where the grant is chosen. Apple hands over one un-scoped
+    session, so the only honest place to ask which services Claude may reach is
+    the moment that session is created — not a settings page discovered later.
     """
     where = (
         "localhost &mdash; this page is running on your own computer"
@@ -306,12 +457,17 @@ def signin_password_page(apple_id: str, action: str, message: str = "", local: b
           <label for="password">Apple ID password</label>
           <input id="password" name="password" type="password"
                  autocomplete="current-password" required>
+          <h2>What Claude may reach</h2>
+          <p class="note" style="margin-top:0">Everything is off except iCloud Drive. Turn on
+             only what you want, and change it any time by signing in again.</p>
+          {service_picker(granted)}
           <button type="submit">Continue to Apple</button>
         </form>
         <p class="note"><strong>Use your account's real password.</strong> An app-specific
            password will not work: Apple accepts those only for Mail, Contacts, Calendar and
            Reminders, never for iCloud Drive. GLYSK never receives it.</p>
         """,
+        script=_PICKER_SCRIPT,
         local=True,
     )
 
@@ -392,6 +548,7 @@ __all__ = [
     "page",
     "alert",
     "permissions_panel",
+    "service_picker",
     "signin_password_page",
     "signin_code_page",
     "signin_done_page",

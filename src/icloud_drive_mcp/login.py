@@ -33,7 +33,7 @@ from pyicloud.exceptions import (
 )
 
 from .config import Config
-from .scope import DriveOnly
+from .scope import Scoped
 
 LOGGER = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ def _new_api(config: Config, apple_id: str, password: str) -> PyiCloudService:
             # Scoped from the moment it exists. Sign-in reads the session and
             # the two-factor state, which stay available; only the other Apple
             # services are refused.
-            return DriveOnly(
+            return Scoped(
                 PyiCloudService(
                     apple_id=apple_id,
                     password=password,
