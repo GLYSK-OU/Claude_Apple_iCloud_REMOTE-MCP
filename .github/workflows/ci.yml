@@ -205,6 +205,22 @@ jobs:
           # silently created as a directory and the container dies reading it.
           echo "$rendered" | grep -q 'icloud-mcp-data' || { echo "state volume missing"; exit 1; }
 
+      - name: Caddy accepts the vhost
+        # This file is only ever parsed on the VPS, where a syntax error means a
+        # failed reload during a deploy. Parse it here instead.
+        run: |
+          docker run --rm -v "$PWD/deploy/infomaniak/icloud.caddy:/site.caddy:ro" \
+            caddy:2-alpine caddy validate --adapter caddyfile --config /site.caddy
+
+      - name: The vhost keeps no file logger
+        # A file log needs a directory writable by the unprivileged caddy user.
+        # Getting that wrong fails the reload, and the journal is right here.
+        run: |
+          if grep -qE '^\s*output\s+file' deploy/infomaniak/icloud.caddy; then
+            echo "The vhost writes to a log file; use the journal instead."
+            exit 1
+          fi
+
       - name: The Caddy vhost proxies the whole host, not just /mcp
         # Scoping to /mcp 404s the OAuth handshake, which needs /.well-known,
         # /authorize, /token, /register and /revoke as well.

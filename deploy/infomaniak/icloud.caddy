@@ -11,11 +11,11 @@ icloud.lopes.me {
 	encode zstd gzip
 
 	# Anthropic reaches this from 160.79.104.0/21; browsers reach the consent
-	# and admin pages. Everything is one app, so one route is correct here.
-	reverse_proxy 127.0.0.1:8440 {
-		header_up X-Forwarded-For {remote_host}
-		header_up X-Forwarded-Proto {scheme}
-	}
+	# and admin pages. It is all one app, so one route is correct.
+	#
+	# No header_up here: Caddy already sets X-Forwarded-For, -Proto and -Host
+	# on a reverse_proxy, and setting them again only earns a load-time warning.
+	reverse_proxy 127.0.0.1:8440
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -23,14 +23,8 @@ icloud.lopes.me {
 		-Server
 	}
 
-	log {
-		output file /var/log/caddy/icloud.log {
-			roll_size 10MiB
-			roll_keep 5
-		}
-		# The admin token can arrive once in a query string. Never log queries.
-		format json {
-			message_key msg
-		}
-	}
+	# Logs go to the journal, like every other site on this box:
+	#   journalctl -u caddy -f | grep icloud
+	# A file logger needs a directory writable by the unprivileged caddy user,
+	# which is one more thing to get wrong for no benefit here.
 }

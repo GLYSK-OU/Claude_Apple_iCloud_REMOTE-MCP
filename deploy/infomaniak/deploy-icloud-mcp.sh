@@ -111,11 +111,6 @@ note "container icloud-mcp"
 step "Publishing ${DOMAIN}"
 install -d -m 0755 /etc/caddy/conf.d
 
-# Caddy provisions its file logger at load time, so a missing directory fails
-# the reload even though `caddy validate` passed.
-install -d -m 0755 -o caddy -g caddy /var/log/caddy 2>/dev/null \
-    || install -d -m 0755 /var/log/caddy
-
 # A conf.d file is inert unless the main Caddyfile imports it. Say so rather
 # than reporting success over a vhost nothing will ever read.
 if ! grep -qE '^\s*import\s+.*conf\.d' /etc/caddy/Caddyfile 2>/dev/null; then
