@@ -90,6 +90,19 @@ code went to a device.
 `pyicloud` performs the delivery inside its constructor and swallows failures
 at debug level, so set `ICLOUD_MCP_LOG_LEVEL=DEBUG` and restart to see them.
 
+A `401` on `GET /appleauth/auth`, with `Session token is still valid` earlier in
+the log, means a stored session answered for the password step while never
+having been trusted. The password is then never used and no code can be
+requested. Sign-in detects this and discards the session automatically; the log
+says so. To clear it by hand:
+
+```bash
+docker compose -f /opt/icloud-mcp/docker-compose.yml down
+docker volume rm icloud-mcp-data
+```
+
+That removes only the Apple session. Nothing in iCloud Drive is touched.
+
 **Re-signing in to Apple** is needed about every 30 days — Apple's limit, not
 this software's. Same `/admin/login` link. Nothing else has to change, and the
 connector stays configured in Claude throughout.

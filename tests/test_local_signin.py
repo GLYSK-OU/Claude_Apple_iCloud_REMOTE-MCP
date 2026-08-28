@@ -12,7 +12,10 @@ import urllib.parse
 import urllib.request
 
 import pytest
-from pyicloud.exceptions import PyiCloudNoTrustedNumberAvailable
+from pyicloud.exceptions import (
+    PyiCloudAPIResponseException,
+    PyiCloudNoTrustedNumberAvailable,
+)
 
 from icloud_drive_mcp.config import Config
 from icloud_drive_mcp.drive import DriveClient
@@ -676,3 +679,94 @@ def test_the_diagnosis_names_the_case_where_no_route_was_offered(config, caplog)
         login._log_two_factor_route(api)
 
     assert "trusted device" in caplog.text
+
+
+# ------------------------------------- a stale session must not hijack the password
+
+
+class _FakeAPIStaleSession(_FakeAPI2FA):
+    """A cached token validated, but the session was never trusted.
+
+    `authenticate()` sets `login_successful = True` from `_validate_token()`
+    alone, so `_authenticate()` — and therefore SRP — never runs. The password
+    is not used, `_auth_data` stays empty, and no code can ever be requested
+    because that needs the `scnt` SRP would have established.
+    """
+
+    def __init__(self, on_request=None):
+        super().__init__(on_request)
+        self._auth_data = {}
+
+    def _get_mfa_auth_options(self):
+        self.options_reads += 1
+        raise PyiCloudAPIResponseException(" (401)", None)
+
+
+def test_a_stale_untrusted_session_is_discarded_and_retried(config, monkeypatch):
+    """The live failure: 401 on the auth options, and no code, forever."""
+    from icloud_drive_mcp import login
+
+    config.session_dir.mkdir(parents=True, exist_ok=True)
+    stale = config.session_dir / "someone.session"
+    stale.write_text("stale")
+    (config.session_dir / "someone.cookiejar").write_text("stale")
+
+    built: list[object] = []
+
+    def _build(**_kw):
+        # First construction reproduces the stale state; the second, after the
+        # files are gone, is the clean SRP sign-in that requests a code.
+        api = _FakeAPIStaleSession() if not built else _FakeAPI2FA()
+        built.append(api)
+        return api
+
+    monkeypatch.setattr(login, "PyiCloudService", _build)
+
+    pending = login.start_login(config, "a@b.c", "pw")
+
+    assert len(built) == 2, "the stale session must be discarded and sign-in retried"
+    assert not stale.exists(), "the stale session file must be removed"
+    assert pending is not None
+    assert not pending.notice, "the retry succeeded, so do not report a failure"
+
+
+def test_a_healthy_session_is_never_discarded(config, monkeypatch):
+    """Only the unrecoverable state is reset — never a working sign-in."""
+    from icloud_drive_mcp import login
+
+    config.session_dir.mkdir(parents=True, exist_ok=True)
+    keep = config.session_dir / "keep.session"
+    keep.write_text("good")
+
+    built: list[object] = []
+
+    def _build(**_kw):
+        api = _FakeAPI2FA()  # _auth_data populated: SRP ran, a code was sent
+        built.append(api)
+        return api
+
+    monkeypatch.setattr(login, "PyiCloudService", _build)
+
+    login.start_login(config, "a@b.c", "pw")
+
+    assert len(built) == 1, "a session that completed the password step must be kept"
+    assert keep.exists()
+
+
+def test_discarding_only_touches_the_session_directory(config):
+    from icloud_drive_mcp import login
+
+    config.session_dir.mkdir(parents=True, exist_ok=True)
+    (config.session_dir / "a.session").write_text("x")
+    (config.session_dir / "b.cookiejar").write_text("x")
+
+    removed = login.discard_session_files(config)
+
+    assert sorted(removed) == ["a.session", "b.cookiejar"]
+    assert config.session_dir.exists(), "the directory itself stays"
+
+
+def test_discarding_is_safe_when_there_is_nothing_to_discard(config):
+    from icloud_drive_mcp import login
+
+    assert login.discard_session_files(config) == []

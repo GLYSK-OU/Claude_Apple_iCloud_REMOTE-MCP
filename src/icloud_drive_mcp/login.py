@@ -189,16 +189,57 @@ def _ensure_a_code_was_requested(api: PyiCloudService) -> str | None:
     return None
 
 
-def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | None:
-    """Do the password step. Returns None when no 2FA code is needed."""
-    if not apple_id:
-        raise LoginError("An Apple ID is required.")
-    if not password:
-        raise LoginError("An Apple ID password is required.")
+def discard_session_files(config: Config) -> list[str]:
+    """Delete the stored Apple session so the next sign-in starts clean.
 
+    Only session state is removed. Nothing here touches the user's iCloud
+    Drive, and the worst case is having to sign in again.
+    """
+    removed: list[str] = []
+    if not config.session_dir.exists():
+        return removed
+    for entry in sorted(config.session_dir.iterdir()):
+        if entry.is_file():
+            try:
+                entry.unlink()
+                removed.append(entry.name)
+            except OSError as exc:  # noqa: PERF203 - report, never abort a sign-in
+                LOGGER.warning("Could not remove %s: %s", entry, exc)
+    return removed
+
+
+def _password_step_was_skipped(api: PyiCloudService) -> bool:
+    """True when a cached session short-circuited the password.
+
+    `authenticate()` validates a stored session token first:
+
+        if self.session.data.get("session_token") and not force_refresh:
+            try:
+                self.data = self._validate_token()
+                login_successful = True
+
+    A token can validate while the session is still *untrusted* — a sign-in
+    that got its password accepted but never completed a code leaves exactly
+    that. `login_successful` is then True, so `_authenticate()` never runs,
+    SRP never runs, and the password submitted here is never used at all.
+
+    The session is stuck: `requires_2fa` stays True because the session is not
+    trusted, and no code can be requested, because requesting one needs the
+    `scnt` and `X-Apple-ID-Session-Id` that only SRP establishes. Without them
+    `GET /appleauth/auth` answers 401 and there is nothing to recover from.
+
+    An empty `_auth_data` alongside a 2FA requirement is that state.
+    """
+    try:
+        return not getattr(api, "_auth_data", None)
+    except Exception:  # noqa: BLE001 - never let a probe break sign-in
+        return False
+
+
+def _new_api(config: Config, apple_id: str, password: str) -> PyiCloudService:
     config.session_dir.mkdir(parents=True, exist_ok=True)
     try:
-        api = PyiCloudService(
+        return PyiCloudService(
             apple_id=apple_id,
             password=password,
             cookie_directory=str(config.session_dir),
@@ -211,6 +252,30 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
         ) from exc
     except PyiCloudAPIResponseException as exc:
         raise LoginError(f"Apple returned an error during sign-in: {exc}") from exc
+
+
+def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | None:
+    """Do the password step. Returns None when no 2FA code is needed."""
+    if not apple_id:
+        raise LoginError("An Apple ID is required.")
+    if not password:
+        raise LoginError("An Apple ID password is required.")
+
+    api = _new_api(config, apple_id, password)
+
+    # Someone submitting a password is asking for a new session, so a stored
+    # one must never quietly take precedence. When a cached token validated
+    # but left the session untrusted, the password was ignored entirely and
+    # the flow cannot be completed — see the helper. Throw that session away
+    # and sign in properly, once.
+    if (api.requires_2fa or api.requires_2sa) and _password_step_was_skipped(api):
+        LOGGER.warning(
+            "A stored session answered for the password step but is not trusted, so no "
+            "code can be requested. Discarding it and signing in from scratch."
+        )
+        removed = discard_session_files(config)
+        LOGGER.info("Discarded stale session files: %s", ", ".join(removed) or "none")
+        api = _new_api(config, apple_id, password)
 
     if not (api.requires_2fa or api.requires_2sa):
         if not api.is_trusted_session:
