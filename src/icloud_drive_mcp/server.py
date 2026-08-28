@@ -103,8 +103,8 @@ def build_server(
         )
 
     mcp = MCPServer(
-        name="icloud-drive",
-        title="iCloud Drive",
+        name="apple-icloud",
+        title="Claude \u21c4 Apple iCloud",
         version="0.1.0",
         instructions=INSTRUCTIONS,
         auth_server_provider=provider,

@@ -127,8 +127,12 @@ CATALOG: tuple[Service, ...] = (
         "Mail",
         None,
         False,
-        "Read and search your iCloud mail.",
-        "Apple exposes no web endpoint pyicloud can use for Mail.",
+        "Read, search and send iCloud mail.",
+        # Genuinely reachable, unlike the rest of this group: IMAP and SMTP
+        # with an app-specific password, one of the four uses Apple honours
+        # those for. It needs a second credential and its own implementation,
+        # so it is not offered yet — but the reason is work, not cryptography.
+        "Needs an app-specific password and IMAP, which this connector does not ask for yet. Possible later.",
     ),
     Service(
         "messages",
@@ -136,7 +140,8 @@ CATALOG: tuple[Service, ...] = (
         None,
         False,
         "Read and send iMessages.",
-        "End-to-end encrypted. The keys never leave your devices.",
+        "End-to-end encrypted, with no web app and no API. Messages in iCloud "
+        "keeps only an encrypted archive Apple itself cannot read.",
     ),
     Service(
         "keychain",

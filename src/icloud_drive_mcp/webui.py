@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse
 from .security import LOCAL_PAGE_HEADERS, SECURITY_HEADERS
 
 BRAND = "GLYSK"
-PRODUCT = "iCloud Drive for Claude"
+PRODUCT = "Claude \u21c4 Apple iCloud"
 
 # The product mark, drawn rather than fetched: a document inside a cloud.
 LOGO = """
@@ -440,11 +440,11 @@ def signin_password_page(
         else "your own server &mdash; this page is served by the connector you deployed"
     )
     return page(
-        "Connect iCloud Drive",
+        "Connect Apple iCloud",
         f"""
         <div class="host">&#x1F512; {where}</div>
-        <h1>Connect Claude to your iCloud Drive</h1>
-        <p class="lead">Sign in with Apple so Claude can work with your files. Your password
+        <h1>Connect Claude to your Apple iCloud</h1>
+        <p class="lead">Sign in with Apple, then choose what Claude may reach. Your password
            goes straight to Apple from here — it is never stored, never sent to Claude, and
            never appears in your conversation.</p>
         {alert(message) if message else ""}

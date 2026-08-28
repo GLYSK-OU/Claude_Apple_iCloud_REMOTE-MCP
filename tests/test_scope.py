@@ -372,3 +372,24 @@ def test_status_reports_what_was_authorised(config, monkeypatch):
     status = drive_client.session_status()
 
     assert status["authorised_services"] == ["iCloud Drive", "Photos"]
+
+
+def test_mail_is_described_as_work_not_impossibility():
+    """Mail is reachable over IMAP with an app-specific password — one of the
+    four uses Apple honours those for. Calling it impossible, next to Messages
+    and Passwords which genuinely are, would be wrong in the direction that
+    quietly closes off a real feature."""
+    from icloud_drive_mcp.services import BY_KEY
+
+    reason = BY_KEY["mail"].unavailable_because
+
+    assert "app-specific password" in reason
+    assert "Possible later" in reason
+
+
+def test_the_end_to_end_encrypted_services_say_so_plainly():
+    """These are not a backlog. No amount of work reaches them."""
+    from icloud_drive_mcp.services import BY_KEY
+
+    for key in ("messages", "keychain", "health"):
+        assert "ncrypted" in BY_KEY[key].unavailable_because, key
