@@ -5,27 +5,32 @@ folders is involved — this talks to Apple's iCloud service directly.
 
 It ships two ways, and which you want depends on where you use Claude:
 
-| | **Plugin** | **Connector** |
-|---|---|---|
-| Install | `/plugin install icloud-drive@glysk` | Paste a URL into Settings → Connectors |
-| Runs | On your own machine, over stdio | On a server you host |
-| Works in | Claude Code | Claude on the web, and anywhere else |
-| Needs hosting | No | Yes, a public HTTPS URL |
-| Adds | 3 skills that teach Claude to use it well | Tools only |
+| | **Desktop extension** | **Plugin** | **Connector** |
+|---|---|---|---|
+| For | Claude Desktop | Claude Code | Claude on the web |
+| Install | Double-click a `.mcpb` | `/plugin install icloud-drive@glysk` | Paste a URL into Settings → Connectors |
+| Runs | On your Mac or PC | On your own machine | On a server you host |
+| Needs hosting | No | No | Yes, a public HTTPS URL |
+| Sign-in | A page on your own computer | `/icloud-drive:setup` | `/admin/login` on the server |
 
-Both expose the same nine tools from the same code. Start with the plugin if
-you are in Claude Code; the connector is what you need for web sessions.
+All three expose the same ten tools from the same code. Only the connector
+needs a server, and only because Claude on the web cannot run anything locally.
 
 ```
-Claude Code  ──stdio──►  connector (local)   ──►  Apple iCloud
-Claude web   ──OAuth──►  connector (hosted)  ──►  Apple iCloud
+Claude Desktop  ──stdio──►  local server        ──►  Apple iCloud
+Claude Code     ──stdio──►  local server        ──►  Apple iCloud
+Claude web      ──OAuth──►  server you host     ──►  Apple iCloud
 ```
 
-> **On wanting "a plugin like the Google Drive one".** The Google Drive entry
-> that ships inside Claude is a first-party Anthropic integration, and third
-> parties cannot add to that list. Everyone else — including Google, for its
-> own Drive MCP server — ships either a Claude Code plugin or a custom
-> connector. This repo is both.
+> **On wanting "one of the published connectors".** The entries already inside
+> Claude — Google Drive among them — are first-party Anthropic integrations,
+> and third parties cannot add to that list. Anthropic's own [review
+> criteria](https://claude.com/docs/connectors/building/review-criteria)
+> require that a directory connector "call your own first-party APIs, or APIs
+> you legitimately proxy", which iCloud's private endpoints are not. A directory
+> listing would also make this one shared service holding many people's Apple
+> credentials. The desktop extension is the sanctioned route for a local server,
+> and it keeps every user's credentials on their own machine.
 
 ---
 
@@ -67,7 +72,7 @@ API (Dropbox, Google Drive, OneDrive) or run a local sync folder instead.
 
 ## What Claude gets
 
-Nine tools, all paths POSIX-style and rooted at the top of iCloud Drive:
+Ten tools, all paths POSIX-style and rooted at the top of iCloud Drive:
 
 | Tool | Does |
 |---|---|
@@ -80,6 +85,7 @@ Nine tools, all paths POSIX-style and rooted at the top of iCloud Drive:
 | `icloud_move` | Move and/or rename in one call |
 | `icloud_delete` | To Recently Deleted by default; `permanent` opt-in |
 | `icloud_session_status` | Whether the Apple session is still alive |
+| `icloud_sign_in` | Open a local sign-in page to connect or reconnect Apple |
 
 Safety behaviours worth knowing:
 
@@ -90,6 +96,39 @@ Safety behaviours worth knowing:
 - **The root jail is enforced at parse time**, in one place, so no path — not
   `../`, not an absolute one — can address anything outside `ICLOUD_ROOT_PATH`.
 - **`ICLOUD_READ_ONLY=true`** refuses every mutating tool outright.
+
+---
+
+## Install as a desktop extension (Claude Desktop)
+
+Download `icloud-drive.mcpb` from the
+[latest release](https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/releases)
+and double-click it. Claude Desktop shows what it does and what it needs, then
+asks for:
+
+| Setting | |
+|---|---|
+| **Apple ID** | The account whose Drive you want to use |
+| **Limit to folder** | Defaults to `/Claude`. Everything outside stays unreachable |
+| **Read-only** | Let Claude read but never change anything |
+| **Largest file (MB)** | Per-file transfer ceiling, 25 by default |
+
+Note there is no password field. To sign in, ask Claude to connect iCloud — it
+calls `icloud_sign_in`, which opens a page **on your own computer** (loopback
+only, behind a single-use link that expires in 15 minutes). Your Apple password
+goes from that page straight to Apple. It never enters the conversation, and it
+is never stored.
+
+Building it yourself:
+
+```bash
+npm install -g @anthropic-ai/mcpb
+./scripts/build-mcpb.sh          # writes dist/icloud-drive.mcpb
+```
+
+**Requirements:** macOS or Windows, and Python 3.11+. The bundle uses the UV
+runtime, so dependencies resolve at install time rather than shipping compiled
+wheels that would not be portable.
 
 ---
 
@@ -322,7 +361,7 @@ Three levels, cheapest first. The first two need no Apple account.
 git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
 cd iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # expect: 100 passed
+.venv/bin/python -m pytest          # expect: 122 passed
 claude plugin validate .            # expect: Validation passed
 ```
 
@@ -377,7 +416,7 @@ so the connector cannot reach anything else.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 100 tests, no Apple account needed
+.venv/bin/python -m pytest        # 122 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 
@@ -388,6 +427,9 @@ verifiable offline. The OAuth flow is covered end to end.
 ```
 src/icloud_drive_mcp/
   paths.py       path parsing and the root jail — the only traversal defence
+  security.py    constant-time comparison, rate limiting, security headers
+  local_signin.py  the loopback sign-in page Claude Desktop uses
+  webui.py       shared HTML chrome for the three pages a human sees
   drive.py       Apple session + all file operations (sync, lock-serialized)
   server.py      the nine MCP tools
   oauth.py       OAuth 2.1 authorization server
@@ -399,6 +441,9 @@ src/icloud_drive_mcp/
 plugin/
   scripts/       the launcher that bootstraps the venv on first run
   skills/        the three skills the plugin ships
+
+mcpb/            Claude Desktop bundle: manifest.json and icon
+scripts/         build-mcpb.sh packages dist/icloud-drive.mcpb
 ```
 
 The repo root *is* the plugin, so an install carries the Python source with it
@@ -431,6 +476,10 @@ web form.
 start. Check the `/plugin` manager's **Errors** tab. The usual cause is Python
 3.11+ missing from `PATH`; the first run also needs network access to PyPI to
 build its virtualenv.
+
+**Desktop: the sign-in page will not open** — it binds to loopback on an
+ephemeral port, so open the exact link Claude gives you, on the same machine.
+Links expire after 15 minutes; ask Claude to sign in again for a fresh one.
 
 **Plugin tools vanished after an update** — run `/reload-plugins`. The launcher
 rebuilds its environment when the packaged code changes, which takes a moment

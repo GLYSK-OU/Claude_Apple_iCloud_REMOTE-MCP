@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "icloud_move",
     "icloud_delete",
     "icloud_session_status",
+    "icloud_sign_in",
 }
 
 

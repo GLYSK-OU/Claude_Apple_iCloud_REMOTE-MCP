@@ -56,6 +56,9 @@ class Config:
     # True when launched by the Claude Code plugin, which changes where a
     # user is sent to fix a sign-in problem.
     is_plugin: bool = False
+    # True when launched from a Claude Desktop bundle, where the user has no
+    # terminal and signs in through a local web page instead.
+    is_desktop: bool = False
     oauth_store: Path = Path("/data/oauth-store.json")
     access_token_ttl: int = 3600
     extra_env: dict[str, str] = field(default_factory=dict)
@@ -76,6 +79,7 @@ class Config:
             port=_int("PORT", 8000),
             public_url=os.environ.get("PUBLIC_URL", "").rstrip("/"),
             is_plugin=_flag("ICLOUD_MCP_PLUGIN"),
+            is_desktop=_flag("ICLOUD_MCP_DESKTOP"),
             gate_password=os.environ.get("MCP_GATE_PASSWORD", ""),
             static_token=os.environ.get("MCP_STATIC_TOKEN", ""),
             admin_token=os.environ.get("ADMIN_TOKEN", ""),
@@ -88,6 +92,8 @@ class Config:
     @property
     def signin_remedy(self) -> str:
         """How this deployment's user is meant to sign in to Apple."""
+        if self.is_desktop:
+            return "Call the icloud_sign_in tool, which opens a sign-in page on this computer."
         if self.is_plugin:
             return "Run /icloud-drive:setup to sign in."
         return (

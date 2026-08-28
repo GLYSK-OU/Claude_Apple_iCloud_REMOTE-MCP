@@ -71,6 +71,43 @@ jobs:
           test -x plugin/scripts/run-server.sh || { echo "run-server.sh is not executable"; exit 1; }
           bash -n plugin/scripts/run-server.sh
 
+  mcpb:
+    name: Desktop bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install the MCPB CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Build the bundle
+        run: ./scripts/build-mcpb.sh
+
+      - name: The bundle carries the server and nothing else
+        run: |
+          mcpb unpack dist/icloud-drive.mcpb /tmp/unpacked
+          test -f /tmp/unpacked/manifest.json
+          test -f /tmp/unpacked/icon.png
+          test -f /tmp/unpacked/src/icloud_drive_mcp/server.py
+          # Tests, CI config, Docker files, and the Claude Code plugin must not
+          # ship to end users.
+          if find /tmp/unpacked \( -path '*test*' -o -name 'Dockerfile' -o -name '*.yml' \
+                                 -o -name '.mcp.json' -o -name '*.egg-info' \) | grep -q .; then
+            echo "The bundle contains files that should not ship:"
+            find /tmp/unpacked \( -path '*test*' -o -name 'Dockerfile' -o -name '*.yml' \
+                                -o -name '.mcp.json' -o -name '*.egg-info' \) 
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icloud-drive-mcpb
+          path: dist/icloud-drive.mcpb
+
   docker:
     name: Docker image
     runs-on: ubuntu-latest

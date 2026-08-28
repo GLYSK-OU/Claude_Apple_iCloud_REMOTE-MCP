@@ -23,3 +23,5 @@ oauth_store.json
 
 # Build artifacts
 build/
+
+dist/

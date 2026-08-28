@@ -21,6 +21,7 @@ from pydantic import Field
 from .config import Config
 from .drive import DriveClient, translate_exception
 from .errors import ICloudMCPError
+from .local_signin import SESSION_TTL_SECONDS, LocalSignInServer
 from .oauth import SCOPE, OwnerPasswordOAuthProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,19 @@ If a tool reports that the iCloud session has expired, no tool here can repair \
 it: a human must re-run the sign-in on the server host with a fresh Apple \
 two-factor code. Say so rather than retrying.\
 """
+
+
+_SIGNIN_SERVERS: dict[int, LocalSignInServer] = {}
+
+
+def _signin_server(config: Config, client: DriveClient) -> LocalSignInServer:
+    """One sign-in server per DriveClient, reused across calls."""
+    key = id(client)
+    server = _SIGNIN_SERVERS.get(key)
+    if server is None:
+        server = LocalSignInServer(config, client)
+        _SIGNIN_SERVERS[key] = server
+    return server
 
 
 async def _run(func, *args, **kwargs):
@@ -305,7 +319,39 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
         return await anyio.to_thread.run_sync(client.session_status)
 
     # Referenced so linters see the registrations as used.
+    @mcp.tool(
+        name="icloud_sign_in",
+        title="Sign in to iCloud",
+        description=(
+            "Open a sign-in page on the user's own computer to connect their Apple account, "
+            "or reconnect it after the roughly 30-day session expires. Returns a URL for the "
+            "user to open in their browser; they enter their Apple ID password and the "
+            "six-digit code there. Never ask for the password in the conversation, and never "
+            "try to submit this form yourself."
+        ),
+        annotations=additive,
+    )
+    async def icloud_sign_in() -> dict[str, Any]:
+        server = _signin_server(config, client)
+        url = await anyio.to_thread.run_sync(server.start)
+        return {
+            "sign_in_url": url,
+            "expires_in_seconds": SESSION_TTL_SECONDS,
+            "instructions": (
+                "Give the user this link and ask them to open it in a browser on this "
+                "computer. The page asks for their Apple ID password and then a six-digit "
+                "code from a trusted Apple device. Their password goes straight to Apple and "
+                "never reaches this conversation. Once they say they are done, call "
+                "icloud_session_status to confirm."
+            ),
+            "note": (
+                "An app-specific password will not work; Apple requires the account's real "
+                "password for iCloud Drive."
+            ),
+        }
+
     _ = (
+        icloud_sign_in,
         icloud_list_directory,
         icloud_get_metadata,
         icloud_read_file,
