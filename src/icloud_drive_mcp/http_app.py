@@ -66,7 +66,32 @@ def create_app(config: Config):
     _register_consent(mcp, provider, consent_limiter)
     _register_admin(mcp, client, config, pending_logins, admin_limiter, hosted_signin)
 
-    return mcp.streamable_http_app(streamable_http_path="/mcp", host=config.host)
+    # `stateless_http` and `json_response` both matter for a *remote* connector,
+    # and the SDK defaults are wrong for one.
+    #
+    # Stateful is the default: the client must `initialize`, receive an
+    # `Mcp-Session-Id`, and replay it on every later request, with the session
+    # held in this process's memory. That suits a client talking straight to a
+    # server it started. Here, Anthropic's infrastructure makes the calls on
+    # behalf of the web, desktop and mobile apps, and nothing guarantees that
+    # every request in a conversation reaches the same process — or that a
+    # session survives between them. When it does not, the server rejects the
+    # call and the client reports the tool as missing, which is why tools can
+    # list correctly and then fail on every invocation.
+    #
+    # Stateless costs nothing here. No tool depends on MCP session state: the
+    # Apple session belongs to the process, and OAuth is carried per request as
+    # a bearer token.
+    #
+    # `json_response` replaces the SSE stream with a plain JSON body. Nothing
+    # here streams partial results, and a single response survives proxies and
+    # CDNs that buffer or time out long-lived event streams.
+    return mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        host=config.host,
+        stateless_http=True,
+        json_response=True,
+    )
 
 
 # ------------------------------------------------------------------- health

@@ -297,3 +297,67 @@ def test_the_consent_handler_names_the_callback_origin():
 
     assert "_origin_of(str(pending.params.redirect_uri))" in handler
     assert "form_action=callback_origin" in handler
+
+
+# ------------------------- a remote connector cannot rely on a sticky session
+
+
+def _mcp_app(config, **kwargs):
+    from icloud_drive_mcp.server import build_server
+
+    mcp, _client, _provider = build_server(config, with_auth=True)
+    return mcp.streamable_http_app(
+        streamable_http_path="/mcp", host=config.host, json_response=True, **kwargs
+    )
+
+
+def _tools_list(app, token):
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as client:
+        return client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+
+
+def test_a_call_without_a_session_id_is_answered(http_config, static_token):
+    """Anthropic's servers make the calls for the web, desktop and mobile apps,
+    and nothing guarantees each request in a conversation reaches the same
+    process. In stateful mode the server answers "Missing session ID" and the
+    client reports every tool as not found — while `tools/list` still looked
+    fine, which is what made this so confusing to diagnose.
+    """
+    response = _tools_list(_mcp_app(http_config, stateless_http=True), static_token)
+
+    assert response.status_code == 200, response.text
+    names = [tool["name"] for tool in response.json()["result"]["tools"]]
+    assert "icloud_list_directory" in names
+    assert "icloud_write_file" in names
+
+
+def test_the_stateful_default_is_what_broke_it(http_config, static_token):
+    """Kept as the counter-example, so the reason for the setting stays visible."""
+    response = _tools_list(_mcp_app(http_config, stateless_http=False), static_token)
+
+    assert response.status_code == 400
+    assert "session id" in response.text.lower()
+
+
+def test_the_served_app_asks_for_stateless_json(http_config):
+    """A guard on the wiring: the app the deployment actually serves."""
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "http_app.py"
+    ).read_text()
+    call = source[source.index("return mcp.streamable_http_app(") :]
+    call = call[: call.index(")")]
+
+    assert "stateless_http=True" in call
+    assert "json_response=True" in call

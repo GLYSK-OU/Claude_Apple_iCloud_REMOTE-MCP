@@ -141,3 +141,25 @@ def client(config, monkeypatch) -> DriveClient:
     monkeypatch.setattr(drive_client, "_connect", lambda: FakeAPI(root))
     drive_client.tree = root  # type: ignore[attr-defined]
     return drive_client
+
+
+STATIC_TOKEN = "t" * 32
+
+
+@pytest.fixture
+def static_token() -> str:
+    return STATIC_TOKEN
+
+
+@pytest.fixture
+def http_config(tmp_path) -> Config:
+    """A config complete enough to serve the real HTTP app."""
+    return Config(
+        apple_id="tester@example.com",
+        session_dir=tmp_path / "session",
+        oauth_store=tmp_path / "oauth.json",
+        public_url="https://example.test",
+        gate_password="p" * 24,
+        admin_token="a" * 32,
+        static_token=STATIC_TOKEN,
+    )

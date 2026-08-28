@@ -76,6 +76,22 @@ Connectors are an account setting, so it appears on iPhone and iPad on its own.
 
 Always `caddy validate --config /etc/caddy/Caddyfile` before reloading.
 
+### When tools list but every call says "tool not found"
+
+The MCP streamable-HTTP transport defaults to stateful: the client must
+`initialize`, take the `Mcp-Session-Id` it is given, and replay it on every
+later request, with the session held in the server process's memory.
+
+A remote connector cannot rely on that. Anthropic's servers make the calls on
+behalf of the web, desktop and mobile apps, and nothing guarantees that every
+request in a conversation reaches the same process. When the session is not
+there, the server answers `400 Bad Request: Missing session ID` and the client
+reports the tool as missing — while `tools/list` may still have looked fine.
+
+This server therefore runs `stateless_http=True`, with `json_response=True` so
+that a single JSON body replaces an SSE stream no proxy has to keep alive.
+Nothing here depends on MCP session state.
+
 ### Changing which folder Claude can reach
 
 `ICLOUD_ROOT_PATH` is asked for once, on the first deploy, and later runs keep
