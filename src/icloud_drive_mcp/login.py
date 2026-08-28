@@ -114,52 +114,63 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
             "attached rather than using this page."
         )
 
-    # The password has been accepted and Apple wants a code. From here we always
-    # hand back a pending login, whatever the delivery bookkeeping says.
+    # The password has been accepted and Apple wants a code.
     #
-    # Apple often pushes the prompt to the trusted device before the call that
-    # reports on it returns, so treating a delivery hiccup as a failure sends
-    # the user back to the password form — and their next attempt makes Apple
-    # send a *second* code. Landing on the code screen costs nothing if no code
-    # arrived: there is a resend button there.
+    # Do NOT ask for a code here. `pyicloud` already did, inside the constructor
+    # above: `_authenticate_with_credentials` catches Apple's 2FA challenge and
+    # calls its private `_request_2fa_code()`, which pushes to the trusted
+    # devices (GET /verify/trusteddevice) and requests an SMS when a trusted
+    # number exists. By the time we get here the code is already in flight.
+    #
+    # Calling the *public* `request_2fa_code()` on top of that is what made
+    # Apple send a second code. It is also a different route — the newer HSA2
+    # bridge — which simply returns False on an account whose boot context does
+    # not offer `auth/bridge/step`, so it would report a scary "Apple declined"
+    # for a code that had in fact already been sent.
     _log_two_factor_route(api)
 
-    notice: str | None = None
-    try:
-        if not api.request_2fa_code():
-            LOGGER.warning(
-                "Apple declined to send a code (delivery=%s). It usually means the account "
-                "wants a security key, or Apple is throttling repeated requests.",
-                getattr(api, "two_factor_delivery_method", "unknown"),
-            )
-            notice = (
-                "Apple declined to send a code just now. This is usually temporary — Apple "
-                "throttles repeated sign-in attempts. Wait a few minutes, then use Send a "
-                "new code. If a code did arrive, enter it below."
-            )
-    except PyiCloudNoTrustedNumberAvailable:
-        notice = (
-            "Apple has no trusted phone number for this account, so it could not send a code "
-            "by SMS. If a prompt reached one of your devices, enter that code below."
-        )
-    except Exception as exc:  # noqa: BLE001 - deliberately broad; see below
-        # Anything at all. The password has been accepted and Apple may already
-        # have pushed a prompt; throwing the session away here would send the
-        # user back to the password form and earn them a second code.
-        LOGGER.warning("Two-factor delivery reported a problem: %s", exc)
-        notice = (
-            f"Apple reported a problem sending the code ({exc}). If a code did arrive on your "
-            "devices, enter it below; otherwise use Send a new code."
-        )
-
+    pending_notice = getattr(api, "two_factor_delivery_notice", None)
     pending = PendingLogin(
         api=api,
         apple_id=apple_id,
         delivery_method=getattr(api, "two_factor_delivery_method", "unknown"),
-        notice=notice or getattr(api, "two_factor_delivery_notice", None),
+        notice=pending_notice,
     )
     LOGGER.info("Two-factor pending: delivery=%s notice=%s", pending.delivery_method, pending.notice)
     return pending
+
+
+def _ask_apple_again(api: PyiCloudService) -> bool:
+    """Trigger another code on an already-authenticated session.
+
+    Two routes exist and only one works on any given account:
+
+    `request_2fa_code()` is the newer HSA2 *bridge* flow. It returns False
+    rather than raising when the account's boot context does not advertise
+    `auth/bridge/step`, which is not a refusal by Apple — it means this account
+    is not on that route at all.
+
+    `_request_2fa_code()` is the route `pyicloud` itself uses during sign-in:
+    a push to the trusted devices plus an SMS when a trusted number exists. It
+    is private, so it is called defensively, but it is the one that delivered
+    the first code on a non-bridge account.
+
+    Returns True when a route reported success, False when neither did.
+    """
+    try:
+        if api.request_2fa_code():
+            return True
+        LOGGER.info("The bridge route is not on offer for this account; using the push route.")
+    except PyiCloudNoTrustedNumberAvailable:
+        LOGGER.info("No trusted phone number; using the push route.")
+    except PyiCloudTrustedDevicePromptException as exc:
+        LOGGER.info("Bridge prompt failed (%s); using the push route.", exc)
+
+    fallback = getattr(api, "_request_2fa_code", None)
+    if not callable(fallback):
+        return False
+    fallback()  # swallows its own transport errors and returns None
+    return True
 
 
 def resend_code(pending: PendingLogin) -> str:
@@ -171,20 +182,17 @@ def resend_code(pending: PendingLogin) -> str:
     """
     LOGGER.info("Resending the two-factor code (delivery=%s)", pending.delivery_method)
     try:
-        if not pending.api.request_2fa_code():
-            LOGGER.warning("Apple declined the resend (delivery=%s)", pending.delivery_method)
-            return (
-                "Apple declined to send another code. It throttles repeated requests, so "
-                "wait a few minutes and try again."
-            )
-    except (
-        PyiCloudNoTrustedNumberAvailable,
-        PyiCloudTrustedDevicePromptException,
-        PyiCloudAPIResponseException,
-    ) as exc:
+        sent = _ask_apple_again(pending.api)
+    except PyiCloudAPIResponseException as exc:
         raise LoginError(f"Apple would not send another code: {exc}") from exc
+
     pending.created_at = time.time()
-    return "Apple sent a new code to your trusted devices."
+    if not sent:
+        return (
+            "Could not trigger another code on this account. If one already arrived on your "
+            "devices it is still valid — enter it below."
+        )
+    return "Apple has been asked to send another code to your trusted devices."
 
 
 def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:

@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
+from pyicloud.exceptions import PyiCloudNoTrustedNumberAvailable
 
 from icloud_drive_mcp.config import Config
 from icloud_drive_mcp.drive import DriveClient
@@ -371,44 +372,65 @@ class _FakeAPI2FA:
     two_factor_delivery_method = "trusted_device"
     two_factor_delivery_notice = None
 
-    def __init__(self, on_request):
-        self._on_request = on_request
+    def __init__(self, on_request=None):
+        self._on_request = on_request or (lambda: True)
         self.requests = 0
+        self.push_requests = 0
 
     def request_2fa_code(self):
+        """The newer HSA2 *bridge* route."""
         self.requests += 1
         return self._on_request()
+
+    def _request_2fa_code(self):
+        """The push+SMS route pyicloud itself uses during sign-in."""
+        self.push_requests += 1
 
 
 @pytest.mark.parametrize(
     "behaviour",
     [
-        lambda: False,  # Apple will not confirm it sent anything
-        lambda: (_ for _ in ()).throw(Exception("boom")),  # or blows up entirely
+        lambda: True,
+        lambda: False,  # the bridge route is not on offer for this account
+        lambda: (_ for _ in ()).throw(Exception("boom")),
     ],
-    ids=["unconfirmed", "raises"],
+    ids=["ok", "unconfirmed", "raises"],
 )
-def test_a_delivery_hiccup_still_reaches_the_code_page(config, monkeypatch, behaviour):
-    """Bouncing back to the password form is what makes Apple send two codes."""
+def test_the_password_step_never_asks_for_a_second_code(config, monkeypatch, behaviour):
+    """pyicloud already requested a code inside the constructor.
+
+    `_authenticate_with_credentials` catches Apple's 2FA challenge and calls
+    its private `_request_2fa_code()`. Asking again here is what made Apple
+    send the user two codes.
+    """
     from icloud_drive_mcp import login
 
     api = _FakeAPI2FA(behaviour)
     monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
 
-    try:
-        pending = login.start_login(config, "a@b.c", "pw")
-    except login.LoginError:
-        pending = None
-    # Whatever Apple said about delivery, the user lands on the code screen.
+    pending = login.start_login(config, "a@b.c", "pw")
+
     assert pending is not None, "an accepted password must not return to the password form"
-    assert pending.notice, "the user should be told what happened with delivery"
+    assert api.requests == 0, "start_login must not trigger a second delivery"
+    assert api.push_requests == 0
+
+
+def test_the_password_step_does_not_invent_a_delivery_failure(config, monkeypatch):
+    """The old code reported "Apple declined" for a code already in flight."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA(lambda: False)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    pending = login.start_login(config, "a@b.c", "pw")
+    assert not pending.notice, "nothing failed, so the code page must not cry wolf"
 
 
 def test_a_security_key_account_is_still_refused(config, monkeypatch):
     """That one genuinely cannot be completed in a browser."""
     from icloud_drive_mcp import login
 
-    api = _FakeAPI2FA(lambda: True)
+    api = _FakeAPI2FA()
     api.security_key_names = ["YubiKey"]
     monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
 
@@ -419,14 +441,58 @@ def test_a_security_key_account_is_still_refused(config, monkeypatch):
 def test_resend_asks_apple_again_without_the_password(config, monkeypatch):
     from icloud_drive_mcp import login
 
-    api = _FakeAPI2FA(lambda: True)
+    api = _FakeAPI2FA()
     monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
     pending = login.start_login(config, "a@b.c", "pw")
-    assert api.requests == 1
+    assert api.requests == 0
 
     message = login.resend_code(pending)
-    assert api.requests == 2
-    assert "new code" in message.lower()
+    assert api.requests == 1
+    assert "code" in message.lower()
+
+
+@pytest.mark.parametrize(
+    "behaviour",
+    [
+        lambda: False,  # bridge route not on offer — the live account's case
+        lambda: (_ for _ in ()).throw(PyiCloudNoTrustedNumberAvailable("no number")),
+    ],
+    ids=["returns_false", "no_trusted_number"],
+)
+def test_resend_falls_back_to_the_route_that_actually_delivers(config, monkeypatch, behaviour):
+    """`request_2fa_code()` returning False is not a refusal by Apple.
+
+    It means this account is not on the bridge route. The live account hit
+    exactly this and was told to "wait a few minutes" for a resend that had
+    never been attempted on the route that works.
+    """
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA(behaviour)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+    pending = login.start_login(config, "a@b.c", "pw")
+
+    message = login.resend_code(pending)
+
+    assert api.push_requests == 1, "the push route must be tried when the bridge declines"
+    assert "throttle" not in message.lower(), "do not blame Apple for our own routing"
+
+
+class _FakeAPIBridgeOnly(_FakeAPI2FA):
+    """An older pyicloud, with no private push route to fall back to."""
+
+    _request_2fa_code = None
+
+
+def test_resend_is_honest_when_no_route_is_available(config, monkeypatch):
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIBridgeOnly(lambda: False)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+    pending = login.start_login(config, "a@b.c", "pw")
+
+    message = login.resend_code(pending)
+    assert "still valid" in message, "never claim a code was sent when none was"
 
 
 def test_the_code_page_offers_a_resend():
@@ -448,9 +514,6 @@ class _FakeAPINetworkTrap(_FakeAPI2FA):
     a 421. Reading one from a log statement is what took sign-in down once.
     """
 
-    def __init__(self):
-        super().__init__(lambda: True)
-
     @property
     def trusted_devices(self):
         raise AssertionError("trusted_devices is a network call and must not be read")
@@ -470,10 +533,9 @@ def test_sign_in_never_reads_a_network_backed_property(config, monkeypatch):
 
     pending = login.start_login(config, "a@b.c", "pw")
     assert pending is not None
-    assert api.requests == 1
 
 
-def test_a_broken_diagnostic_cannot_break_sign_in(config, monkeypatch, caplog):
+def test_a_broken_diagnostic_cannot_break_sign_in(config, monkeypatch):
     """Belt and braces: even if a future edit reads something that raises."""
     from icloud_drive_mcp import login
 
