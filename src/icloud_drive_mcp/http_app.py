@@ -27,6 +27,7 @@ from .login import (
     PendingLoginRegistry,
     code_from_form,
     finish_login,
+    resend_code,
     start_login,
 )
 from .oauth import OwnerPasswordOAuthProvider
@@ -308,6 +309,14 @@ def _register_admin(
                         if started.delivery_method == "trusted_device"
                         else "Apple sent a code by SMS."
                     )
+                elif step == "resend":
+                    current = pending.take()
+                    if current is None:
+                        stage = "password"
+                        message = "That sign-in attempt timed out. Start again."
+                    else:
+                        stage = "code"
+                        message = await anyio.to_thread.run_sync(resend_code, current)
                 else:
                     current = pending.take()
                     if current is None:
@@ -324,7 +333,10 @@ def _register_admin(
                         )
             except LoginError as exc:
                 message = str(exc)
-                stage = "code" if step == "code" and pending.take() else "password"
+                # Only a rejected password sends you back to the password form.
+                # Once Apple has a code in flight, staying on the code screen is
+                # what stops a retry triggering a second one.
+                stage = "password" if step == "password" or pending.take() is None else "code"
 
         action = "/admin/login"
         if stage == "code":

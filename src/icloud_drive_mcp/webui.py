@@ -321,6 +321,10 @@ def signin_code_page(action: str, message: str = "") -> HTMLResponse:
           <div class="codes">{boxes}</div>
           <button type="submit">Verify and connect</button>
         </form>
+        <form method="post" action="{action}">
+          <input type="hidden" name="step" value="resend">
+          <button type="submit" class="secondary">Send a new code</button>
+        </form>
         <p class="note">Apple sent this code, not GLYSK. If you did not just start this
            sign-in, close this page and change your Apple ID password.</p>
         """,

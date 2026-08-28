@@ -356,3 +356,82 @@ def test_code_is_read_the_same_way_by_both_flows():
         assert "code_from_form(form)" in source, name
         # The old direct read would skip the fallback entirely.
         assert 'form.get("code")' not in source, name
+
+
+# ------------------------------------------- an accepted password reaches the code page
+
+
+class _FakeAPI2FA:
+    """An Apple client that wants a code and misbehaves while sending it."""
+
+    requires_2fa = True
+    requires_2sa = False
+    is_trusted_session = False
+    security_key_names = None
+    two_factor_delivery_method = "trusted_device"
+    two_factor_delivery_notice = None
+
+    def __init__(self, on_request):
+        self._on_request = on_request
+        self.requests = 0
+
+    def request_2fa_code(self):
+        self.requests += 1
+        return self._on_request()
+
+
+@pytest.mark.parametrize(
+    "behaviour",
+    [
+        lambda: False,  # Apple will not confirm it sent anything
+        lambda: (_ for _ in ()).throw(Exception("boom")),  # or blows up entirely
+    ],
+    ids=["unconfirmed", "raises"],
+)
+def test_a_delivery_hiccup_still_reaches_the_code_page(config, monkeypatch, behaviour):
+    """Bouncing back to the password form is what makes Apple send two codes."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA(behaviour)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    try:
+        pending = login.start_login(config, "a@b.c", "pw")
+    except login.LoginError:
+        pending = None
+    # Whatever Apple said about delivery, the user lands on the code screen.
+    assert pending is not None, "an accepted password must not return to the password form"
+    assert pending.notice, "the user should be told what happened with delivery"
+
+
+def test_a_security_key_account_is_still_refused(config, monkeypatch):
+    """That one genuinely cannot be completed in a browser."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA(lambda: True)
+    api.security_key_names = ["YubiKey"]
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    with pytest.raises(login.LoginError, match="security key"):
+        login.start_login(config, "a@b.c", "pw")
+
+
+def test_resend_asks_apple_again_without_the_password(config, monkeypatch):
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA(lambda: True)
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+    pending = login.start_login(config, "a@b.c", "pw")
+    assert api.requests == 1
+
+    message = login.resend_code(pending)
+    assert api.requests == 2
+    assert "new code" in message.lower()
+
+
+def test_the_code_page_offers_a_resend():
+    from icloud_drive_mcp.webui import signin_code_page
+
+    body = signin_code_page("/admin/login").body.decode()
+    assert 'value="resend"' in body
+    assert "Send a new code" in body

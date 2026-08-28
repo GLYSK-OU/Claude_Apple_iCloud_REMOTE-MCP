@@ -90,25 +90,65 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
         raise LoginError(
             "This Apple ID is protected by a hardware security key. A key must be physically "
             "present to sign in, so run `icloud-drive-mcp login` on a machine with the key "
-            "attached rather than using the web form."
+            "attached rather than using this page."
         )
 
+    # The password has been accepted and Apple wants a code. From here we always
+    # hand back a pending login, whatever the delivery bookkeeping says.
+    #
+    # Apple often pushes the prompt to the trusted device before the call that
+    # reports on it returns, so treating a delivery hiccup as a failure sends
+    # the user back to the password form — and their next attempt makes Apple
+    # send a *second* code. Landing on the code screen costs nothing if no code
+    # arrived: there is a resend button there.
+    notice: str | None = None
     try:
         if not api.request_2fa_code():
-            raise LoginError("Apple would not send a code for this account; it is asking for a security key.")
-    except PyiCloudNoTrustedNumberAvailable as exc:
-        raise LoginError("Apple wants to send a code but this account has no trusted phone number.") from exc
-    except PyiCloudTrustedDevicePromptException as exc:
-        raise LoginError(f"Apple would not send the two-factor prompt: {exc}") from exc
-    except PyiCloudAPIResponseException as exc:
-        raise LoginError(f"Apple would not send the two-factor code: {exc}") from exc
+            notice = (
+                "Apple did not confirm that it sent a code. Check your trusted devices — if "
+                "one arrived, enter it below; otherwise use Send a new code."
+            )
+    except PyiCloudNoTrustedNumberAvailable:
+        notice = (
+            "Apple has no trusted phone number for this account, so it could not send a code "
+            "by SMS. If a prompt reached one of your devices, enter that code below."
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad; see below
+        # Anything at all. The password has been accepted and Apple may already
+        # have pushed a prompt; throwing the session away here would send the
+        # user back to the password form and earn them a second code.
+        LOGGER.warning("Two-factor delivery reported a problem: %s", exc)
+        notice = (
+            f"Apple reported a problem sending the code ({exc}). If a code did arrive on your "
+            "devices, enter it below; otherwise use Send a new code."
+        )
 
     return PendingLogin(
         api=api,
         apple_id=apple_id,
         delivery_method=getattr(api, "two_factor_delivery_method", "unknown"),
-        notice=getattr(api, "two_factor_delivery_notice", None),
+        notice=notice or getattr(api, "two_factor_delivery_notice", None),
     )
+
+
+def resend_code(pending: PendingLogin) -> str:
+    """Ask Apple for another code on the session already in progress.
+
+    Without this the only way to get a second code is to re-enter the password,
+    which is both annoying and the thing that made Apple send two codes in the
+    first place.
+    """
+    try:
+        if not pending.api.request_2fa_code():
+            return "Apple would not send another code. Check your trusted devices."
+    except (
+        PyiCloudNoTrustedNumberAvailable,
+        PyiCloudTrustedDevicePromptException,
+        PyiCloudAPIResponseException,
+    ) as exc:
+        raise LoginError(f"Apple would not send another code: {exc}") from exc
+    pending.created_at = time.time()
+    return "Apple sent a new code to your trusted devices."
 
 
 def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:

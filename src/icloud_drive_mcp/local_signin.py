@@ -28,7 +28,14 @@ from starlette.routing import Route
 
 from .config import Config
 from .drive import DriveClient
-from .login import LoginError, PendingLogin, code_from_form, finish_login, start_login
+from .login import (
+    LoginError,
+    PendingLogin,
+    code_from_form,
+    finish_login,
+    resend_code,
+    start_login,
+)
 from .security import SECURITY_HEADERS, constant_time_equals
 from .webui import page, signin_code_page, signin_done_page, signin_password_page
 
@@ -175,6 +182,14 @@ class LocalSignInServer:
                             if started.delivery_method == "trusted_device"
                             else "Apple sent a code by SMS."
                         )
+                    elif step == "resend":
+                        if self._pending is None or self._pending.expired:
+                            self._pending = None
+                            stage = "password"
+                            message = "That attempt timed out. Start again."
+                        else:
+                            stage = "code"
+                            message = resend_code(self._pending)
                     elif self._pending is None or self._pending.expired:
                         self._pending = None
                         stage = "password"
@@ -191,7 +206,10 @@ class LocalSignInServer:
                         )
                 except LoginError as exc:
                     message = str(exc)
-                    stage = "code" if step == "code" and self._pending else "password"
+                    # Only a rejected password returns to the password form; once
+                    # Apple has a code in flight, staying here stops a retry
+                    # triggering a second one.
+                    stage = "password" if step == "password" or not self._pending else "code"
 
             return self._form_page(stage, message)
 
