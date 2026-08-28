@@ -49,6 +49,7 @@ from .errors import (
     UpstreamError,
 )
 from .paths import DrivePath, display_path, parse_path, validate_name
+from .scope import DriveOnly
 
 LOGGER = logging.getLogger(__name__)
 
@@ -141,7 +142,9 @@ class DriveClient:
 
     def _client(self) -> PyiCloudService:
         if self._api is None:
-            self._api = self._connect()
+            # Scoped here rather than inside _connect, so a test that swaps
+            # _connect for a fake is still held to the same limit.
+            self._api = DriveOnly(self._connect())
         return self._api
 
     def reset(self) -> None:

@@ -73,3 +73,11 @@ class TooLargeError(ICloudMCPError):
 
 class UpstreamError(ICloudMCPError):
     """iCloud rejected the request or is unavailable."""
+
+
+class ServiceNotPermittedError(ICloudMCPError):
+    """An Apple service outside iCloud Drive was reached for.
+
+    Not a failure of Apple's — a refusal by this software, which is scoped to
+    Drive. See `scope.py`.
+    """

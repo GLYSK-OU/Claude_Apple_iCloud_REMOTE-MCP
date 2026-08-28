@@ -1,5 +1,25 @@
 # Security
 
+## Scope: iCloud Drive only, enforced
+
+Apple issues one un-scoped session for iCloud web. There is no Drive-only
+login, so the client `pyicloud` returns can reach Photos, Contacts, Calendar,
+Reminders, Notes, Find My and Hide My Email from the same object used for
+Drive. The consent screen says so, because it is what a user actually
+authorises.
+
+What this software touches is narrower, and is enforced rather than intended.
+`icloud_drive_mcp/scope.py` wraps the client so every service accessor except
+`drive` raises `ServiceNotPermittedError`. Reaching Photos is therefore not
+something to be careful about; it cannot happen while that guard exists.
+
+Adding a service is deliberate by construction: a name has to be removed from
+`BLOCKED_SERVICES`, which is a reviewable diff in a security-relevant file, and
+it should come with its own consent-screen wording and its own tools. A test
+also fails if a future `pyicloud` release exposes a service the list does not
+name, so a dependency upgrade cannot quietly widen the reach.
+
+
 This project holds the keys to someone's iCloud Drive. Please read this before
 deploying it, and please report anything you find.
 

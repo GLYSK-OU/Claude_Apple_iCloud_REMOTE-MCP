@@ -204,9 +204,10 @@ def permissions_panel() -> str:
       <ul class="perms">
         <li class="warn"><span class="g">!</span><span>Apple does not offer a Drive-only login.
           The session created here is a <strong>general iCloud session</strong>: it could also
-          reach Photos, Contacts, Calendar, Reminders, Notes and Find My. This software never
-          calls them, but the session is not restricted to Drive, so anyone who took control of
-          this computer could.</span></li>
+          reach Photos, Contacts, Calendar, Reminders, Notes and Find My. This software refuses
+          every one of them &mdash; not as a policy but in code, so a mistake or a later change
+          cannot quietly widen it. The <em>session</em> is still un-restricted, though, so
+          anyone who took control of this computer could use it directly.</span></li>
         <li class="warn"><span class="g">!</span><span>If that matters to you, sign in with a
           <strong>separate Apple ID</strong> that only has the folder you want to share.</span></li>
       </ul>

@@ -33,6 +33,7 @@ from pyicloud.exceptions import (
 )
 
 from .config import Config
+from .scope import DriveOnly
 
 LOGGER = logging.getLogger(__name__)
 
@@ -280,10 +281,15 @@ def _new_api(config: Config, apple_id: str, password: str) -> PyiCloudService:
     config.session_dir.mkdir(parents=True, exist_ok=True)
     try:
         with _only_one_code():
-            return PyiCloudService(
-                apple_id=apple_id,
-                password=password,
-                cookie_directory=str(config.session_dir),
+            # Scoped from the moment it exists. Sign-in reads the session and
+            # the two-factor state, which stay available; only the other Apple
+            # services are refused.
+            return DriveOnly(
+                PyiCloudService(
+                    apple_id=apple_id,
+                    password=password,
+                    cookie_directory=str(config.session_dir),
+                )
             )
     except PyiCloudFailedLoginException as exc:
         raise LoginError(
