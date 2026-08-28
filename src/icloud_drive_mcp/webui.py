@@ -114,6 +114,8 @@ _PAGE = """<!doctype html>
   ul.perms li .g {{ flex: none; width: 16px; font-weight: 700; line-height: 1.5; }}
   li.yes .g {{ color: var(--brand); }}
   li.no .g {{ color: var(--ok); }}
+  li.warn .g {{ color: var(--warn); }}
+  li.warn span:last-child {{ color: var(--ink); }}
   .footer {{ margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--hair);
              font-size: 11.5px; color: var(--muted); text-align: center; }}
   .codes {{ display: flex; gap: 8px; justify-content: space-between; margin-top: 8px; }}
@@ -160,24 +162,42 @@ def alert(message: str, kind: str = "error") -> str:
 
 
 def permissions_panel() -> str:
-    """Spell out what connecting actually grants. People deserve the list."""
+    """Spell out what signing in actually grants.
+
+    An earlier version of this claimed the session could not reach Photos,
+    Contacts or Find My. That was wrong: Apple issues one un-scoped session for
+    iCloud web, and `pyicloud` exposes photos, contacts, calendar, reminders,
+    notes, devices and hidemyemail from the very same object this uses for
+    Drive. Saying otherwise on a consent screen is worse than saying nothing,
+    so the panel now separates what this software does from what the session
+    permits.
+    """
     return """
     <div class="panel">
-      <h2>What you are authorising</h2>
+      <h2>What this software does</h2>
       <ul class="perms">
-        <li class="yes"><span class="g">+</span><span>Claude can <strong>read</strong> files and
-          folders in the iCloud Drive area you allow.</span></li>
-        <li class="yes"><span class="g">+</span><span>Claude can <strong>create, change, move
-          and delete</strong> files there. Deletions go to Recently Deleted for 30 days.</span></li>
+        <li class="yes"><span class="g">+</span><span><strong>iCloud Drive only.</strong> It can
+          read, create, change, move and delete files in the Drive folder you allow, and
+          nothing else. Deletions go to Recently Deleted for 30 days.</span></li>
       </ul>
-      <h2>What this does not do</h2>
+      <h2>What signing in actually grants</h2>
       <ul class="perms">
-        <li class="no"><span class="g">&minus;</span><span>Your Apple password is never stored,
-          and never sent to Claude or to GLYSK. It goes only to Apple.</span></li>
-        <li class="no"><span class="g">&minus;</span><span>No access to Mail, Photos, Contacts,
-          Messages, Find My, Keychain, or payments.</span></li>
-        <li class="no"><span class="g">&minus;</span><span>Nothing is uploaded anywhere. This
-          software runs on this computer only.</span></li>
+        <li class="warn"><span class="g">!</span><span>Apple does not offer a Drive-only login.
+          The session created here is a <strong>general iCloud session</strong>: it could also
+          reach Photos, Contacts, Calendar, Reminders, Notes and Find My. This software never
+          calls them, but the session is not restricted to Drive, so anyone who took control of
+          this computer could.</span></li>
+        <li class="warn"><span class="g">!</span><span>If that matters to you, sign in with a
+          <strong>separate Apple ID</strong> that only has the folder you want to share.</span></li>
+      </ul>
+      <h2>What stays out of reach</h2>
+      <ul class="perms">
+        <li class="no"><span class="g">&minus;</span><span>Passwords in iCloud Keychain, Apple Pay
+          and payment methods, and iMessage content. Apple end-to-end encrypts these and does not
+          expose them to the web service this uses.</span></li>
+        <li class="no"><span class="g">&minus;</span><span>Your Apple password is never written to
+          disk and never sent to Claude or to GLYSK. It goes to Apple to create the session, and
+          is discarded.</span></li>
       </ul>
     </div>
     """

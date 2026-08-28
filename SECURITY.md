@@ -11,11 +11,24 @@ rather than a public issue. We aim to acknowledge within 72 hours.
 Please include what you did, what happened, and what you expected. A proof of
 concept helps. Do not test against anyone's account but your own.
 
-## What this software can do
+## What this software can do, and what the session can
 
-Read, write, move, and delete every file in the iCloud Drive it is signed in
-to. There is no narrower permission Apple can grant it, so the blast radius of
-a compromise is the whole Drive unless you confine it yourself.
+**This software touches iCloud Drive only.** Ten tools, all of them Drive
+operations. That is checkable in `src/icloud_drive_mcp/server.py`.
+
+**The Apple session it holds is not limited to Drive.** Apple offers no
+Drive-only login for this API. The authenticated client exposes `photos`,
+`contacts`, `calendar`, `reminders`, `notes`, `devices` (Find My) and
+`hidemyemail` from the same object used for `drive`. This code never calls
+them — but an attacker with the session, or anyone who modified the code,
+would not be limited the way this software limits itself.
+
+Treat the stored session as **credentials for the whole iCloud account**, not
+for one folder. The mitigation is a dedicated Apple ID, below.
+
+Genuinely out of reach: iCloud Keychain passwords, Apple Pay and payment
+methods, and iMessage content. Apple end-to-end encrypts those and does not
+expose them to this web service at all.
 
 ## Deploying it safely
 
@@ -24,10 +37,11 @@ resolved inside that folder, and nothing outside it is reachable — not through
 `../`, not through an absolute path. This is the single most effective control
 available, and it costs nothing.
 
-**Consider a dedicated Apple ID.** The server needs the account's real
-password to sign in. An Apple ID that owns only the folder you share to it
-limits what a compromise reaches, and keeps your primary account's password
-off the server.
+**Use a dedicated Apple ID.** This is the strongest control available, and
+given the un-scoped session above it is close to a requirement rather than a
+suggestion. An Apple ID that owns only the folder you share to it means a
+compromise reaches that folder — not your photos, contacts, calendar and
+device locations.
 
 **Keep the session directory private.** It holds Apple's trust token, which is
 a bearer credential for the account until it expires. Use a volume only the
@@ -68,6 +82,8 @@ the risk rather than discover it.
   for the duration of the flow, so trust the host you run this on.
 - **No audit log.** Tool calls are not recorded beyond ordinary application
   logs.
+- **The Apple session cannot be scoped.** Covered above; repeated here because
+  it is the single most important thing to understand before deploying this.
 - **Apple's endpoints are private.** They can change without notice, and
   automated iCloud access is not sanctioned by Apple. Availability is not
   something this project can guarantee.

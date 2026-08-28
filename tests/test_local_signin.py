@@ -123,10 +123,44 @@ def test_sign_in_page_states_what_is_being_authorised(signin):
     _, body, _ = _get(signin.start())
     squashed = _squash(body)
     # People deserve the list before they type a password, not after.
-    assert "What you are authorising" in squashed
-    assert "create, change, move and delete" in squashed
-    assert "never stored" in squashed
-    assert "No access to Mail, Photos, Contacts" in squashed
+    assert "iCloud Drive only" in squashed
+    assert "read, create, change, move and delete" in squashed
+    assert "never written to disk" in squashed
+
+
+def test_sign_in_page_admits_the_session_is_not_scoped(signin):
+    """The consent screen must not overstate what it can promise.
+
+    Apple issues one un-scoped session: `pyicloud` exposes photos, contacts,
+    calendar, reminders, notes and devices from the same client used for
+    drive. An earlier version of this page claimed those were out of reach,
+    which was false. This pins the honest version.
+    """
+    _, body, _ = _get(signin.start())
+    squashed = _squash(body)
+    assert "Apple does not offer a Drive-only login" in squashed
+    assert "Photos, Contacts, Calendar, Reminders, Notes and Find My" in squashed
+    assert "separate Apple ID" in squashed
+
+
+def test_sign_in_page_does_not_claim_photos_or_contacts_are_unreachable(signin):
+    """Guards against the false claim returning."""
+    _, body, _ = _get(signin.start())
+    squashed = _squash(body)
+    for false_claim in (
+        "No access to Mail, Photos",
+        "cannot touch Photos",
+        "no access to Contacts",
+    ):
+        assert false_claim.lower() not in squashed.lower(), false_claim
+
+
+def test_sign_in_page_only_claims_what_apple_really_encrypts(signin):
+    """Keychain, Apple Pay and iMessage genuinely are out of reach."""
+    _, body, _ = _get(signin.start())
+    squashed = _squash(body)
+    assert "Keychain" in squashed
+    assert "end-to-end" in squashed
 
 
 def test_sign_in_page_says_the_page_is_local(signin):

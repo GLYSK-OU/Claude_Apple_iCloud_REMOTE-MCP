@@ -66,6 +66,7 @@ means:
 | **After that** | Apple issues a trust token, stored on the server; the password is not kept |
 | **Session life** | Roughly 30 days, then a human re-enters a fresh code (see below) |
 | **Stability** | These are private endpoints. Apple can change them without notice, and this connector would break until `pyicloud` catches up |
+| **Scope** | None. The session is a general iCloud session, not a Drive-only one |
 | **Terms** | Automated access to iCloud is not something Apple sanctions |
 
 If those trade-offs are not acceptable, there is no other way to reach iCloud
@@ -89,8 +90,10 @@ Claude will tell you plainly when it lapses rather than retrying and failing.
 
 - Set `ICLOUD_ROOT_PATH` to a single folder, so the connector can only ever see
   that folder. Full-Drive access is rarely what you actually want.
-- Consider a dedicated Apple ID with just that folder shared to it, so the
-  password on the server is not the one guarding your whole Apple account.
+- Use a dedicated Apple ID with just that folder shared to it. Apple has no
+  Drive-only login, so the session this creates could also reach Photos,
+  Contacts, Calendar, Reminders, Notes and Find My. This software never calls
+  them, but the credential is not scoped — see [SECURITY.md](SECURITY.md).
 
 ---
 
