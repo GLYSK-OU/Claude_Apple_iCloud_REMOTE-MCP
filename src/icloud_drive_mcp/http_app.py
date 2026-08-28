@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import logging
+import urllib.parse
 from typing import Any
 
 import anyio.to_thread
@@ -124,6 +125,21 @@ def _admin_authorized(request: Request, config: Config) -> bool:
 # ------------------------------------------------------------------ consent
 
 
+def _origin_of(url: str) -> str:
+    """The scheme://host[:port] a redirect will land on, for `form-action`.
+
+    Only ever used to widen CSP by exactly one origin, so anything unparseable
+    or non-HTTP yields nothing and the header stays at its strictest.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ""
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLimiter) -> None:
     @mcp.custom_route("/consent", methods=["GET", "POST"])
     async def consent(request: Request) -> Response:
@@ -147,12 +163,19 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLi
                 status=503,
             )
 
-        if provider.take_pending(request_id) is None:
+        pending = provider.take_pending(request_id)
+        if pending is None:
             return _page(
                 "Link expired",
                 "<h1>This sign-in link has expired</h1><p>Go back to Claude and start connecting again.</p>",
                 status=400,
             )
+
+        # Allowing the code exchange means redirecting to this client's callback,
+        # and `form-action` governs the whole navigation a submit starts, so the
+        # destination has to be named or the browser cancels the redirect and the
+        # Allow button appears to do nothing at all. Name that one origin only.
+        callback_origin = _origin_of(str(pending.params.redirect_uri))
 
         error = ""
         caller = client_key(request)
@@ -215,6 +238,7 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLi
                have it to hand; if it lapses, start the connection again from Claude.</p>
             """,
             status=401 if error else 200,
+            form_action=callback_origin,
         )
 
     _ = consent

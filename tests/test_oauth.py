@@ -238,3 +238,62 @@ def test_the_consent_page_says_where_the_password_comes_from():
 
     assert "not your Apple ID password" in source
     assert "15 minutes" in source, "say how long there is to go and find it"
+
+
+# ------------------- the consent redirect must survive the page's own CSP
+
+
+def test_the_consent_page_permits_its_own_redirect():
+    """`form-action` governs the whole navigation a submit starts, redirects
+    included. The consent POST answers with a 302 to the OAuth client's
+    callback, so a bare `form-action 'self'` makes the browser cancel it — and
+    it does so silently, which reads as the Allow button doing nothing.
+    """
+    from icloud_drive_mcp.webui import page
+
+    response = page("t", "<p>x</p>", form_action="https://claude.ai")
+    csp = response.headers["content-security-policy"]
+
+    assert "form-action 'self' https://claude.ai" in csp
+    # Nothing else may be loosened along the way.
+    assert "default-src 'none'" in csp
+    assert "base-uri 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+
+
+def test_a_page_with_no_redirect_keeps_the_strict_form_action():
+    from icloud_drive_mcp.webui import page
+
+    csp = page("t", "<p>x</p>").headers["content-security-policy"]
+    assert "form-action 'self';" in csp or csp.endswith("form-action 'self'")
+    assert "https://" not in csp
+
+
+def test_only_the_callback_origin_is_allowed_not_its_path():
+    """Widen by an origin, never by a full URL carrying a code or state."""
+    from icloud_drive_mcp.http_app import _origin_of
+
+    assert _origin_of("https://claude.ai/api/mcp/auth_callback?state=abc") == "https://claude.ai"
+    assert _origin_of("https://example.test:8443/cb") == "https://example.test:8443"
+
+
+def test_an_unusable_redirect_uri_does_not_widen_the_policy():
+    """A custom scheme or junk must leave the header at its strictest."""
+    from icloud_drive_mcp.http_app import _origin_of
+
+    for value in ("", "not a url", "javascript:alert(1)", "cursor://cb", "file:///etc/passwd"):
+        assert _origin_of(value) == "", value
+
+
+def test_the_consent_handler_names_the_callback_origin():
+    """A guard: the CSP fix only works if the handler actually passes it."""
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "http_app.py"
+    ).read_text()
+    handler = source[source.index("async def consent(") :]
+    handler = handler[: handler.index("\n    _ = consent")]
+
+    assert "_origin_of(str(pending.params.redirect_uri))" in handler
+    assert "form_action=callback_origin" in handler

@@ -141,8 +141,28 @@ _PAGE = """<!doctype html>
 """
 
 
-def page(title: str, body: str, status: int = 200, script: str = "", local: bool = False) -> HTMLResponse:
-    """Render a branded page. `local` relaxes the CSP just enough for the code boxes."""
+def page(
+    title: str,
+    body: str,
+    status: int = 200,
+    script: str = "",
+    local: bool = False,
+    form_action: str = "",
+) -> HTMLResponse:
+    """Render a branded page. `local` relaxes the CSP just enough for the code boxes.
+
+    `form_action` names one extra origin a form on this page may end up at.
+    `form-action` governs the whole navigation a submit starts, redirects
+    included, so a page whose POST answers with a 302 elsewhere must name that
+    destination or the browser cancels the navigation — with no error the user
+    can see. The consent page is exactly that: it redirects to the OAuth
+    client's callback.
+    """
+    headers = dict(LOCAL_PAGE_HEADERS if local else SECURITY_HEADERS)
+    if form_action:
+        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
+            "form-action 'self'", f"form-action 'self' {form_action}"
+        )
     return HTMLResponse(
         _PAGE.format(
             title=html.escape(title),
@@ -153,7 +173,7 @@ def page(title: str, body: str, status: int = 200, script: str = "", local: bool
             script=script,
         ),
         status_code=status,
-        headers=dict(LOCAL_PAGE_HEADERS if local else SECURITY_HEADERS),
+        headers=headers,
     )
 
 
