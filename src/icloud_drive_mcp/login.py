@@ -238,14 +238,53 @@ def _password_step_was_skipped(api: PyiCloudService) -> bool:
         return False
 
 
+# Patching a library class is global, so serialise the sign-ins that do it.
+_SMS_SUPPRESSION_LOCK = threading.Lock()
+
+
+@contextmanager
+def _only_one_code() -> Iterator[None]:
+    """Stop `pyicloud` firing an SMS nobody asked for.
+
+    `_request_2fa_code()`, which runs inside the constructor, sends to both
+    routes unconditionally: a GET to `/verify/trusteddevice`, then a PUT to
+    `/verify/phone` whenever Apple has a trusted number.
+
+    That is not just untidy. Apple's codes are session-scoped — bound to the
+    `scnt` / session-id pair they were issued against — and `scnt` rotates on
+    responses. The device code is issued first, the SMS request rotates the
+    session out from under it, and by validation time *neither* code matches
+    the state the session now holds. Both are rejected, and the user is told
+    twice that their correct digits are wrong.
+
+    The SMS leg is reached only through `_trusted_phone_number()`, so making
+    that report no number for the duration confines delivery to the device
+    push. Resending can still ask for an SMS deliberately, which is the only
+    time the user expects one.
+    """
+    target = PyiCloudService
+    original = getattr(target, "_trusted_phone_number", None)
+    if original is None:  # a stand-in without the private helper; nothing to suppress
+        yield
+        return
+
+    with _SMS_SUPPRESSION_LOCK:
+        target._trusted_phone_number = lambda self: None  # type: ignore[method-assign]
+        try:
+            yield
+        finally:
+            target._trusted_phone_number = original  # type: ignore[method-assign]
+
+
 def _new_api(config: Config, apple_id: str, password: str) -> PyiCloudService:
     config.session_dir.mkdir(parents=True, exist_ok=True)
     try:
-        return PyiCloudService(
-            apple_id=apple_id,
-            password=password,
-            cookie_directory=str(config.session_dir),
-        )
+        with _only_one_code():
+            return PyiCloudService(
+                apple_id=apple_id,
+                password=password,
+                cookie_directory=str(config.session_dir),
+            )
     except PyiCloudFailedLoginException as exc:
         raise LoginError(
             "Apple rejected that Apple ID and password. Note that an app-specific password will "

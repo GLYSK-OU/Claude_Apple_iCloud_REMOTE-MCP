@@ -75,6 +75,14 @@ Connectors are an account setting, so it appears on iPhone and iPad on its own.
 
 Always `caddy validate --config /etc/caddy/Caddyfile` before reloading.
 
+### When the code arrives but is rejected
+
+Apple's codes are session-scoped: bound to the `scnt` / session-id pair they
+were issued against, and `scnt` rotates on responses. Requesting a second code
+therefore invalidates the first. Sign-in sends to the trusted devices only, and
+an SMS goes out solely when Send a new code asks for one, so exactly one code
+is ever live. **Use the most recent code you received.**
+
 ### When the two-factor code never arrives
 
 With HSA2 the code normally arrives as a **push prompt on a trusted Apple

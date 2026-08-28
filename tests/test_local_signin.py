@@ -978,3 +978,64 @@ def test_no_second_route_is_tried_when_apple_has_no_phone_number():
         login.finish_login(_pending(api), "123456")
 
     assert api.attempted_routes == ["trusted_device"], "no number means no SMS code exists"
+
+
+# ----------------------------------------- exactly one code, under one session state
+
+
+def test_the_sms_leg_is_suppressed_while_signing_in():
+    """Apple's codes are session-scoped, bound to the scnt they were issued
+    against, and scnt rotates on responses. Firing the SMS after the device
+    push rotates the session out from under the device code, so neither code
+    matches by validation time and both are rejected.
+
+    This exercises the real `pyicloud` class, since suppression works by
+    patching it.
+    """
+    from pyicloud import PyiCloudService
+
+    from icloud_drive_mcp import login
+
+    before = PyiCloudService._trusted_phone_number
+
+    calls: list[str] = []
+
+    class _Probe:
+        """Stands in for a session mid-sign-in."""
+
+        def _trusted_phone_number(self):
+            calls.append("asked")
+            return "+1234"
+
+    with login._only_one_code():
+        # `_request_2fa_code` reaches the SMS leg only through this helper, so
+        # a None here is the difference between one code and two.
+        assert PyiCloudService._trusted_phone_number(_Probe()) is None
+
+    assert PyiCloudService._trusted_phone_number is before, "the patch must be undone"
+
+
+def test_the_suppression_is_undone_even_when_sign_in_raises():
+    from pyicloud import PyiCloudService
+
+    from icloud_drive_mcp import login
+
+    before = PyiCloudService._trusted_phone_number
+    with pytest.raises(RuntimeError):
+        with login._only_one_code():
+            raise RuntimeError("Apple said no")
+    assert PyiCloudService._trusted_phone_number is before
+
+
+def test_signing_in_wraps_construction_in_the_suppression():
+    """A regression guard: the suppression only helps if it wraps the
+    constructor, which is where pyicloud requests the code."""
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "login.py"
+    ).read_text()
+    build = source[source.index("def _new_api(") :]
+    build = build[: build.index("\ndef ")]
+    assert "with _only_one_code():" in build
+    assert build.index("with _only_one_code():") < build.index("PyiCloudService(")
