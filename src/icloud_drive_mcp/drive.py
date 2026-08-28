@@ -170,16 +170,40 @@ class DriveClient:
             }
             try:
                 api = self._client()
-                # Cheap authenticated call: listing the root touches the Drive
-                # web service the same way a real tool call would.
-                api.drive.refresh_root()
-                names = api.drive.root.dir()
+                # Count what the *configured* root holds, not what the Drive
+                # root holds. Reporting `api.drive.root.dir()` while confined to
+                # a subfolder made status contradict every tool beside it: a jail
+                # of /Claude holding one file was reported as 19 entries, which
+                # is the number at the top of the Drive. Resolving the same way a
+                # tool call does is still the cheap authenticated round-trip this
+                # check wants.
+                try:
+                    node = self._resolve_dir(self._parse("/"), refresh=True)
+                    entries = node.get_children(force=True)
+                except PathNotFoundError:
+                    # Signed in and reachable, but ICLOUD_ROOT_PATH names a
+                    # folder that is not there — a mistyped jail, which would
+                    # otherwise surface only as every operation failing later.
+                    return {
+                        **base,
+                        "authenticated": True,
+                        "trusted_session": bool(api.is_trusted_session),
+                        "drive_reachable": True,
+                        "root_exists": False,
+                        "error": (
+                            f"Signed in, but the configured root '{base['root_path']}' does not "
+                            "exist in this iCloud Drive, so no path can resolve. Set "
+                            "ICLOUD_ROOT_PATH to '/' for the whole Drive, or to a folder that "
+                            "exists, and restart."
+                        ),
+                    }
                 return {
                     **base,
                     "authenticated": True,
                     "trusted_session": bool(api.is_trusted_session),
                     "drive_reachable": True,
-                    "root_entry_count": len(names),
+                    "root_exists": True,
+                    "root_entry_count": len(entries),
                 }
             except ICloudMCPError as exc:
                 self._api = None

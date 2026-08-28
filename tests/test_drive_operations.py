@@ -422,3 +422,61 @@ def test_the_image_names_the_backend_too():
     for index, line in enumerate(lines[1:], start=1):
         if line.lstrip().startswith("#"):
             assert not lines[index - 1].rstrip().endswith("\\"), f"line {index + 1}"
+
+
+# ------------------- status must describe the same Drive the tools operate on
+
+
+def _jailed_client(config, monkeypatch, root_parts):
+    from icloud_drive_mcp.config import Config
+    from icloud_drive_mcp.drive import DriveClient
+
+    from .conftest import FakeAPI, build_tree
+
+    jailed = Config(
+        apple_id=config.apple_id,
+        session_dir=config.session_dir,
+        oauth_store=config.oauth_store,
+        root=root_parts,
+    )
+    drive_client = DriveClient(jailed)
+    monkeypatch.setattr(drive_client, "_connect", lambda: FakeAPI(build_tree()))
+    return drive_client
+
+
+def test_status_counts_the_configured_root_not_the_drive_root(config, monkeypatch):
+    """The reported "19 entries" against a /Claude jail holding one file.
+
+    Status listed api.drive.root regardless of the jail, so it described a
+    different folder from every tool beside it — a mismatch that reads as data
+    loss or a sync fault, and cost a real debugging session.
+    """
+    drive_client = _jailed_client(config, monkeypatch, ("Documents",))
+
+    status = drive_client.session_status()
+    listed = drive_client.list_directory("/", limit=100, offset=0)
+
+    assert status["root_path"] == "/Documents"
+    assert status["root_exists"] is True
+    assert status["root_entry_count"] == listed["total"], (
+        "status must agree with icloud_list_directory on the same path"
+    )
+    # The Drive root has a different count, which is what used to be reported.
+    unjailed = _jailed_client(config, monkeypatch, ())
+    assert unjailed.session_status()["root_entry_count"] != status["root_entry_count"]
+
+
+def test_status_says_when_the_configured_root_does_not_exist(config, monkeypatch):
+    """A mistyped ICLOUD_ROOT_PATH — a bare "Y" at the deploy prompt became
+    /Y — otherwise shows up only as every later operation failing, with
+    nothing pointing back at the setting that caused it.
+    """
+    drive_client = _jailed_client(config, monkeypatch, ("Y",))
+
+    status = drive_client.session_status()
+
+    assert status["authenticated"] is True, "the session is fine; the setting is not"
+    assert status["drive_reachable"] is True
+    assert status["root_exists"] is False
+    assert "/Y" in status["error"]
+    assert "ICLOUD_ROOT_PATH" in status["error"]
