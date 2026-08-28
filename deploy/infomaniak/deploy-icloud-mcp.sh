@@ -193,6 +193,11 @@ cat <<DONE
 
 $(printf '\033[1mDeployed.\033[0m')
 
+  $(printf '\033[33mThe two secrets below are live credentials for your iCloud Drive.\033[0m')
+  $(printf '\033[33mDo not paste this output into a chat, an issue, or a document.\033[0m')
+  To rotate them later: edit ${ENV_FILE}, then
+  docker compose -f ${APP}/docker-compose.yml up -d --force-recreate
+
   1. Sign in to Apple, once:
 
        https://${DOMAIN}/admin/login?token=${admin_token}
