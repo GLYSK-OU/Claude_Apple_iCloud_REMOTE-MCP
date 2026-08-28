@@ -55,12 +55,22 @@ else
     admin="$(openssl rand -hex 32)"
     static="$(openssl rand -hex 32)"
 
-    read -rp "    Apple ID email: " apple_id
-    [ -n "$apple_id" ] || die "an Apple ID is required"
+    # Driven by install.sh, nothing may block on a prompt. The Apple ID is not
+    # needed to start: the sign-in page asks for it, and asking twice for the
+    # same thing is exactly the friction this is meant to remove.
+    if [ -n "${ICLOUD_MCP_NONINTERACTIVE:-}" ]; then
+        apple_id="${ICLOUD_APPLE_ID:-}"
+    else
+        read -rp "    Apple ID email: " apple_id
+        [ -n "$apple_id" ] || die "an Apple ID is required"
+    fi
     # A bare word here is almost always a mis-answer — someone typing "y" at a
     # prompt they read as a yes/no question — and it silently confines Claude to
     # a folder of that name which does not exist, so every later operation fails
     # for a reason that looks nothing like this prompt. Insist on a real path.
+    if [ -n "${ICLOUD_MCP_NONINTERACTIVE:-}" ]; then
+        root_path="${ICLOUD_MCP_ROOT_PATH:-/}"
+    else
     while :; do
         printf "    Which Drive folder should Claude be confined to?\n"
         printf "    Enter / for the whole iCloud Drive, or a path such as /Claude.\n"
@@ -72,6 +82,7 @@ else
             *) printf "    A folder must start with '/'. Enter / for the whole Drive.\n\n" ;;
         esac
     done
+    fi
 
     # Written in a subshell so the restrictive umask cannot leak into the
     # files created later — the vhost in particular, which Caddy reads as an

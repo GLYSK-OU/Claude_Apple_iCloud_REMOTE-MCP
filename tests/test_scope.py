@@ -393,3 +393,76 @@ def test_the_end_to_end_encrypted_services_say_so_plainly():
 
     for key in ("messages", "keychain", "health"):
         assert "ncrypted" in BY_KEY[key].unavailable_because, key
+
+
+# ------------------------------------------------------------- the installer
+
+
+def _installer() -> str:
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[1] / "install.sh").read_text()
+
+
+def test_the_installer_reads_the_domain_from_the_terminal_not_stdin():
+    """Piped from curl, stdin *is* the script. A bare `read` would swallow the
+    rest of the body and run a truncated installer."""
+    source = _installer()
+
+    assert "read -r DOMAIN < /dev/tty" in source
+    assert "read -r DOMAIN\n" not in source
+
+
+def test_the_installer_refuses_a_domain_pointing_elsewhere():
+    """Let's Encrypt would fail issuance and the connector would have no
+    certificate, which is a far worse thing to discover afterwards."""
+    source = _installer()
+
+    assert "does not resolve to anything" in source
+    assert "points somewhere else" in source
+    assert "AAAA record pointing elsewhere" in source
+
+
+def test_the_installer_checks_caddy_reads_conf_d():
+    """A vhost in conf.d is inert unless the main Caddyfile imports it, and
+    the failure looks like a DNS or certificate problem instead."""
+    assert "import /etc/caddy/conf.d/*.caddy" in _installer()
+
+
+def test_the_installer_does_not_reimplement_the_deploy():
+    """Two things to keep correct is one too many."""
+    source = _installer()
+
+    assert "deploy-icloud-mcp.sh" in source
+    assert "docker build" not in source, "the deploy script owns the build"
+    assert "caddy validate" not in source, "the deploy script owns the vhost"
+
+
+def test_the_installer_runs_the_deploy_unattended():
+    source = _installer()
+
+    assert "ICLOUD_MCP_NONINTERACTIVE=1" in source
+
+
+def test_the_deploy_script_asks_nothing_when_driven():
+    """Otherwise the one-command install blocks forever on a prompt nobody
+    can see, behind a progress display."""
+    import pathlib
+
+    deploy = (
+        pathlib.Path(__file__).resolve().parents[1] / "deploy" / "infomaniak" / "deploy-icloud-mcp.sh"
+    ).read_text()
+
+    guarded = deploy.count('if [ -n "${ICLOUD_MCP_NONINTERACTIVE:-}" ]; then')
+    assert guarded >= 2, "both the Apple ID and the folder prompt must be skippable"
+
+
+def test_the_installer_ends_with_one_url_and_no_shell_steps():
+    """The complaint was copy-paste. What is left has to be a link and a click."""
+    source = _installer()
+    tail = source[source.index("# ------------------------------------------------------------------ done") :]
+
+    assert "/admin/login" in tail
+    assert "Settings → Connectors" in tail
+    assert "docker " not in tail, "nothing left for the user to run"
+    assert "python" not in tail

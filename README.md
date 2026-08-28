@@ -45,6 +45,24 @@ on claude.ai makes it appear on your phone and tablet by itself.
 
 ---
 
+## Install
+
+On a server with a domain pointing at it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/main/install.sh | sudo bash
+```
+
+It asks for the domain, then does the rest: preflight, DNS and IPv6 checks,
+secrets, image, container, Caddy vhost, certificate and a health check, with a
+progress display. It ends with one link to open — sign in to Apple there and
+choose which services Claude may reach — and the URL to paste into
+Settings → Connectors.
+
+Needs Docker, Caddy and a domain whose A record (and AAAA, if the host has
+IPv6) already points at the machine. It stops with a specific reason rather
+than a broken install if any of that is missing.
+
 ## Read this first: app-specific passwords will not work
 
 Apple issues app-specific passwords for exactly four services — Mail,

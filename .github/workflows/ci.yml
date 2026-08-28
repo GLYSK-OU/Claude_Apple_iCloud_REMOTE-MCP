@@ -176,6 +176,8 @@ jobs:
 
       - name: Shell scripts parse
         run: |
+          bash -n install.sh
+          test -x install.sh || { echo 'install.sh is not executable'; exit 1; }
           bash -n deploy/infomaniak/deploy-icloud-mcp.sh
           bash -n deploy/infomaniak/check-ipv6.sh
           bash -n plugin/scripts/run-server.sh
