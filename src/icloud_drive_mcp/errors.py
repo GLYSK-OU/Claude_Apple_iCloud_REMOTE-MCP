@@ -11,20 +11,36 @@ class ICloudMCPError(Exception):
     """Base class for errors that are safe to show an MCP client."""
 
 
+class NotConfiguredError(ICloudMCPError):
+    """No Apple ID has been set, so sign-in has never been attempted.
+
+    Distinct from an expired session: telling a first-time user their session
+    expired sends them looking for a problem that does not exist.
+    """
+
+    def __init__(self, remedy: str) -> None:
+        super().__init__(
+            "iCloud Drive is not set up yet — no Apple ID has been configured, so this "
+            f"server has never signed in. {remedy} No tool here can do it."
+        )
+
+
 class NotAuthenticatedError(ICloudMCPError):
     """The stored Apple session is missing, expired, or was revoked.
 
-    Apple sessions are not renewable without a fresh 2FA code, so recovery is
-    always the same: a human re-runs the login flow on the host.
+    Apple sessions are not renewable without a fresh 2FA code, so recovery
+    always needs a human.
     """
 
-    def __init__(self, detail: str = "") -> None:
+    def __init__(self, detail: str = "", remedy: str = "") -> None:
+        remedy = remedy or (
+            "A human must re-authenticate on the server host by running "
+            "`icloud-drive-mcp login`, or by opening the /admin/login page."
+        )
         message = (
             "Not signed in to iCloud. The stored Apple session is missing or has expired "
             "(Apple sessions last roughly 30 days and cannot be renewed without a new "
-            "two-factor code). A human must re-authenticate on the server host by running "
-            "`icloud-drive-mcp login` (or opening the /admin/login page) and entering the "
-            "6-digit code Apple sends to a trusted device. No tool here can fix this."
+            f"two-factor code). {remedy} No tool here can fix this."
         )
         if detail:
             message = f"{message} Underlying error: {detail}"

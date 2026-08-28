@@ -124,14 +124,18 @@ class DriveClient:
                 cookie_directory=str(config.session_dir),
             )
         except _AUTH_FAILURES as exc:
-            raise NotAuthenticatedError(str(exc)) from exc
+            raise NotAuthenticatedError(str(exc), config.signin_remedy) from exc
         except PyiCloudServiceUnavailable as exc:
             raise UpstreamError(f"iCloud is temporarily unavailable: {exc}") from exc
+        except ICloudMCPError:
+            raise
         except Exception as exc:  # pyicloud raises bare exceptions on some paths
-            raise NotAuthenticatedError(str(exc)) from exc
+            raise NotAuthenticatedError(str(exc), config.signin_remedy) from exc
 
         if api.requires_2fa or api.requires_2sa:
-            raise NotAuthenticatedError("Apple is asking for a new two-factor code.")
+            raise NotAuthenticatedError(
+                "Apple is asking for a new two-factor code.", config.signin_remedy
+            )
         return api
 
     def _client(self) -> PyiCloudService:

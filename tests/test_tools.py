@@ -148,7 +148,8 @@ async def test_session_status_never_errors_without_a_session(config):
     result = await mcp.call_tool("icloud_session_status", {})
     payload = _payload(result)
     assert payload["authenticated"] is False
-    assert "re-authenticate" in payload["error"]
+    # An Apple ID is configured here, so this is the expiry path, not first-run.
+    assert "icloud-drive-mcp login" in payload["error"]
 
 
 async def test_build_server_with_auth_wires_the_provider(tmp_path):

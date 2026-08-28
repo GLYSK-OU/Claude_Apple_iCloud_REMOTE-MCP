@@ -208,3 +208,37 @@ def test_read_only_mode_blocks_writes(config, monkeypatch):
 
     # Reads still work in read-only mode.
     assert locked.list_directory("/Documents", 50, 0)["total"] == 3
+
+
+def test_unconfigured_server_says_setup_not_expired(tmp_path):
+    """A first-time user must not be told their session expired."""
+    from dataclasses import replace
+
+    from icloud_drive_mcp.config import Config
+    from icloud_drive_mcp.drive import DriveClient
+    from icloud_drive_mcp.errors import NotConfiguredError
+
+    blank = Config(apple_id="", session_dir=tmp_path / "s", oauth_store=tmp_path / "o.json")
+
+    with pytest.raises(NotConfiguredError, match="not set up yet"):
+        DriveClient(blank).list_directory("/", 10, 0)
+
+    # The remedy names the CLI for a server, and the skill for the plugin.
+    assert "icloud-drive-mcp login" in blank.signin_remedy
+    assert "/icloud-drive:setup" in replace(blank, is_plugin=True).signin_remedy
+
+
+def test_unconfigured_status_reports_setup_guidance(tmp_path):
+    from dataclasses import replace
+
+    from icloud_drive_mcp.config import Config
+    from icloud_drive_mcp.drive import DriveClient
+
+    plugin_cfg = replace(
+        Config(apple_id="", session_dir=tmp_path / "s", oauth_store=tmp_path / "o.json"),
+        is_plugin=True,
+    )
+    status = DriveClient(plugin_cfg).session_status()
+    assert status["authenticated"] is False
+    assert "/icloud-drive:setup" in status["error"]
+    assert "expired" not in status["error"]

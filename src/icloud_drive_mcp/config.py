@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .errors import NotConfiguredError
 from .paths import parse_root
 
 
@@ -52,6 +53,9 @@ class Config:
     static_token: str = ""
     # Guards the /admin/login page used to refresh the Apple session.
     admin_token: str = ""
+    # True when launched by the Claude Code plugin, which changes where a
+    # user is sent to fix a sign-in problem.
+    is_plugin: bool = False
     oauth_store: Path = Path("/data/oauth-store.json")
     access_token_ttl: int = 3600
     extra_env: dict[str, str] = field(default_factory=dict)
@@ -71,6 +75,7 @@ class Config:
             host=os.environ.get("HOST", "0.0.0.0"),
             port=_int("PORT", 8000),
             public_url=os.environ.get("PUBLIC_URL", "").rstrip("/"),
+            is_plugin=_flag("ICLOUD_MCP_PLUGIN"),
             gate_password=os.environ.get("MCP_GATE_PASSWORD", ""),
             static_token=os.environ.get("MCP_STATIC_TOKEN", ""),
             admin_token=os.environ.get("ADMIN_TOKEN", ""),
@@ -80,12 +85,19 @@ class Config:
             access_token_ttl=_int("ACCESS_TOKEN_TTL", 3600),
         )
 
+    @property
+    def signin_remedy(self) -> str:
+        """How this deployment's user is meant to sign in to Apple."""
+        if self.is_plugin:
+            return "Run /icloud-drive:setup to sign in."
+        return (
+            "A human must sign in on the server host by running `icloud-drive-mcp login`, "
+            "or by opening the /admin/login page."
+        )
+
     def require_apple_id(self) -> str:
         if not self.apple_id:
-            raise ValueError(
-                "ICLOUD_APPLE_ID is not set. Set it to the Apple ID email address whose "
-                "iCloud Drive this server should expose."
-            )
+            raise NotConfiguredError(self.signin_remedy)
         return self.apple_id
 
     def validate_for_http(self) -> None:

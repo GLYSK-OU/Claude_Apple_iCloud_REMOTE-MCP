@@ -103,6 +103,18 @@ for you.
 /plugin install icloud-drive@glysk
 ```
 
+`marketplace add` reads the repository's **default branch**, so that one-liner
+only works once this is merged to `main`. To try it from a feature branch,
+clone the branch and point the marketplace at the checkout:
+
+```bash
+git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
+```
+```
+/plugin marketplace add ./iCloud_Drive_2_Claude_Connector
+/plugin install icloud-drive@glysk
+```
+
 Then sign in to Apple:
 
 ```
@@ -300,11 +312,72 @@ raises.
 
 ---
 
+## How to test it
+
+Three levels, cheapest first. The first two need no Apple account.
+
+### 1. The plumbing, offline (2 minutes)
+
+```bash
+git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
+cd iCloud_Drive_2_Claude_Connector
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest          # expect: 85 passed
+claude plugin validate .            # expect: Validation passed
+```
+
+### 2. The plugin loads and its tools appear (2 minutes)
+
+```bash
+claude --plugin-dir . -p "How many tools do you have whose name contains 'icloud'?"
+```
+
+Expect `9`. The first run builds a virtualenv and takes about a minute; after
+that it starts in under a second. Then check the pre-setup state is reported
+honestly:
+
+```bash
+claude --plugin-dir . -p "Call icloud_session_status and quote the error field."
+```
+
+Expect it to say iCloud Drive is not set up yet and point at
+`/icloud-drive:setup` — not that a session expired.
+
+### 3. Against your real iCloud (5 minutes)
+
+This is the only step that proves anything about Apple, and the only one that
+needs your real password. In an interactive Claude Code session with the plugin
+installed:
+
+```
+/icloud-drive:setup
+```
+
+Have a trusted Apple device to hand for the 6-digit code. Then try, in order:
+
+| Ask Claude | Confirms |
+|---|---|
+| "What's in my iCloud Drive?" | Listing and auth |
+| "Create a folder called ClaudeTest" | Folder creation |
+| "Write hello.md in ClaudeTest saying Hello from Claude" | Upload |
+| "Read ClaudeTest/hello.md back" | Download round trip |
+| "Rename it to greeting.md" | Move and rename |
+| "Delete ClaudeTest" | Delete to Recently Deleted |
+
+Check `iCloud.com` or your iPhone's Files app between steps — the point is that
+the changes appear there, on a device you never configured.
+
+The delete goes to **Recently Deleted**, so that last step is reversible. Do
+this in a scratch folder the first time regardless, and set `ICLOUD_ROOT_PATH`
+so the connector cannot reach anything else.
+
+---
+
 ## Development
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 83 tests, no Apple account needed
+.venv/bin/python -m pytest        # 85 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 
