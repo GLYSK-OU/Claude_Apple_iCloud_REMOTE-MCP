@@ -1,0 +1,17 @@
+services:
+  icloud-drive-mcp:
+    build: .
+    image: icloud-drive-mcp:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    # Matches the uid the image runs as; a mismatch here means the container
+    # cannot read its own session directory and exits at start-up.
+    user: "10001:10001"
+    volumes:
+      # Keeps the Apple session across restarts.
+      - icloud-data:/data
+
+volumes:
+  icloud-data:

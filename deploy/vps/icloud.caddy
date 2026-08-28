@@ -1,0 +1,30 @@
+# /etc/caddy/conf.d/icloud.caddy
+#
+# Public TLS for the iCloud Drive MCP connector.
+#
+# Proxy the WHOLE host, not just /mcp. The OAuth handshake also needs
+# /.well-known/*, /authorize, /token, /register and /revoke, and the human
+# flows need /consent, /admin/* and /status. Scoping this to /mcp alone 404s
+# the handshake and the connector never finishes connecting.
+
+icloud.example.com {
+	encode zstd gzip
+
+	# Anthropic reaches this from 160.79.104.0/21; browsers reach the consent
+	# and admin pages. It is all one app, so one route is correct.
+	#
+	# No header_up here: Caddy already sets X-Forwarded-For, -Proto and -Host
+	# on a reverse_proxy, and setting them again only earns a load-time warning.
+	reverse_proxy 127.0.0.1:8440
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# Logs go to the journal, like every other site on this box:
+	#   journalctl -u caddy -f | grep icloud
+	# A file logger needs a directory writable by the unprivileged caddy user,
+	# which is one more thing to get wrong for no benefit here.
+}

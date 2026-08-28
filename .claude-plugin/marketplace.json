@@ -1,0 +1,16 @@
+{
+  "name": "glysk",
+  "owner": {
+    "name": "GLYSK OU",
+    "url": "https://github.com/GLYSK-OU"
+  },
+  "description": "Connectors and tools from GLYSK OU.",
+  "plugins": [
+    {
+      "name": "icloud-drive",
+      "source": "./",
+      "description": "Read and write Apple iCloud Drive from Claude, with no synced Mac or PC.",
+      "keywords": ["icloud", "apple", "files", "storage", "drive"]
+    }
+  ]
+}

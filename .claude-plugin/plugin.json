@@ -1,0 +1,23 @@
+{
+  "name": "icloud-drive",
+  "displayName": "iCloud Drive",
+  "version": "0.2.3",
+  "description": "Read and write Apple iCloud Drive from Claude, with no synced Mac or PC. Runs locally over stdio, so no server hosting is needed.",
+  "author": {
+    "name": "GLYSK OU",
+    "url": "https://github.com/GLYSK-OU"
+  },
+  "homepage": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP",
+  "repository": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP",
+  "license": "MIT",
+  "keywords": [
+    "icloud",
+    "apple",
+    "files",
+    "storage",
+    "drive",
+    "documents"
+  ],
+  "skills": "./plugin/skills/",
+  "mcpServers": "./plugin/mcp-servers.json"
+}

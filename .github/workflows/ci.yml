@@ -1,0 +1,234 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Format check
+        run: ruff format --check src tests
+
+      - name: Tests
+        run: pytest -q
+
+  plugin:
+    name: Plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate the marketplace manifest
+        run: claude plugin validate . --strict
+
+      - name: Validate the plugin manifest
+        # Both manifests live in .claude-plugin/, and the validator picks the
+        # marketplace when it sees one. Isolate the plugin to check it too.
+        run: |
+          mkdir -p /tmp/plugin-only
+          cp -r .claude-plugin plugin src pyproject.toml README.md LICENSE /tmp/plugin-only/
+          rm /tmp/plugin-only/.claude-plugin/marketplace.json
+          claude plugin validate /tmp/plugin-only --strict
+
+      - name: Launcher is executable and syntax-clean
+        run: |
+          test -x plugin/scripts/run-server.sh || { echo "run-server.sh is not executable"; exit 1; }
+          bash -n plugin/scripts/run-server.sh
+
+  mcpb:
+    name: Desktop bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install the MCPB CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Build the bundle
+        run: ./scripts/build-mcpb.sh
+
+      - name: The bundle carries the server and nothing else
+        run: |
+          mcpb unpack dist/icloud-drive.mcpb /tmp/unpacked
+          test -f /tmp/unpacked/manifest.json
+          test -f /tmp/unpacked/icon.png
+          test -f /tmp/unpacked/src/icloud_drive_mcp/server.py
+          # Tests, CI config, Docker files, and the Claude Code plugin must not
+          # ship to end users.
+          if find /tmp/unpacked \( -path '*test*' -o -name 'Dockerfile' -o -name '*.yml' \
+                                 -o -name '.mcp.json' -o -name '*.egg-info' \) | grep -q .; then
+            echo "The bundle contains files that should not ship:"
+            find /tmp/unpacked \( -path '*test*' -o -name 'Dockerfile' -o -name '*.yml' \
+                                -o -name '.mcp.json' -o -name '*.egg-info' \) 
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icloud-drive-mcpb
+          path: dist/icloud-drive.mcpb
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: docker build -t icloud-drive-mcp:ci .
+
+      - name: The image starts and refuses an unsafe configuration
+        run: |
+          # No PUBLIC_URL and no credential: the server must refuse rather than
+          # expose an unauthenticated iCloud Drive on a public URL.
+          output=$(docker run --rm -e ICLOUD_APPLE_ID=ci@example.com icloud-drive-mcp:ci http 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "PUBLIC_URL is not set" || {
+            echo "Expected the server to refuse to start without PUBLIC_URL"; exit 1; }
+
+      - name: The CLI reports status without a session
+        run: docker run --rm -e ICLOUD_APPLE_ID=ci@example.com icloud-drive-mcp:ci status || true
+
+      - name: It runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id icloud-drive-mcp:ci -u)
+          echo "container uid: $uid"
+          test "$uid" = "10001" || { echo "expected uid 10001, got $uid"; exit 1; }
+
+      - name: It serves under the production hardening
+        # The VPS compose runs this read-only, non-root, with no new
+        # privileges and a tmpfs. Prove that combination actually boots here
+        # rather than on the server.
+        run: |
+          docker run -d --name hardened \
+            --read-only --user 10001:10001 --security-opt no-new-privileges:true \
+            --tmpfs /tmp:size=256m --tmpfs /home/icloud:size=16m \
+            -v icloud-ci-data:/data -p 127.0.0.1:8440:8000 \
+            -e ICLOUD_APPLE_ID=ci@example.com \
+            -e PUBLIC_URL=https://icloud.example.com \
+            -e MCP_GATE_PASSWORD=ci-gate -e ADMIN_TOKEN=ci-admin \
+            -e ICLOUD_SESSION_DIR=/data/icloud-session \
+            -e OAUTH_STORE_PATH=/data/oauth-store.json \
+            icloud-drive-mcp:ci http
+          for i in $(seq 30); do
+            curl -fsS --max-time 2 http://127.0.0.1:8440/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "--- health ---"
+          curl -fsS http://127.0.0.1:8440/health
+          echo
+          echo "--- OAuth discovery, which Claude needs before anything else ---"
+          curl -fsS http://127.0.0.1:8440/.well-known/oauth-authorization-server | head -c 200
+          echo
+          echo "--- /mcp must refuse an anonymous caller ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8440/mcp \
+                   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+                   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          test "$code" = "401" || { echo "expected 401, got $code"; docker logs hardened; exit 1; }
+          echo "401 as expected"
+          docker rm -f hardened >/dev/null
+
+  deploy-config:
+    name: Deploy config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Shell scripts parse
+        run: |
+          bash -n install.sh
+          test -x install.sh || { echo 'install.sh is not executable'; exit 1; }
+          bash -n deploy/vps/deploy-icloud-mcp.sh
+          bash -n deploy/vps/check-ipv6.sh
+          bash -n plugin/scripts/run-server.sh
+          bash -n scripts/build-mcpb.sh
+
+      - name: Compose file is valid
+        run: |
+          # The env file is written by the deploy script at run time. Production
+          # should keep failing loudly when it is absent, so rather than marking
+          # it optional, CI supplies an empty one just to check the syntax.
+          sudo mkdir -p /etc/icloud-mcp
+          sudo touch /etc/icloud-mcp/icloud-mcp.env
+          docker compose -f deploy/vps/docker-compose.yml config >/dev/null
+
+      - name: Compose keeps the hardening the image relies on
+        run: |
+          rendered=$(docker compose -f deploy/vps/docker-compose.yml config)
+          # Compose normalises values, so match the rendered form, not the source.
+          # A hard memory ceiling matters as much as the other hardening: it is
+          # what keeps a runaway read inside this container instead of starving
+          # the sibling services on the same box.
+          for required in 'user: 10001:10001' 'read_only: true' 'no-new-privileges:true' 'mem_limit'; do
+            echo "$rendered" | grep -q "$required" || {
+              echo "compose lost: $required"; exit 1; }
+          done
+          # A named volume, never a host path: a missing bind-mount source is
+          # silently created as a directory and the container dies reading it.
+          echo "$rendered" | grep -q 'icloud-mcp-data' || { echo "state volume missing"; exit 1; }
+
+      - name: Caddy accepts the vhost
+        # This file is only ever parsed on the VPS, where a syntax error means a
+        # failed reload during a deploy. Parse it here instead.
+        run: |
+          docker run --rm -v "$PWD/deploy/vps/icloud.caddy:/site.caddy:ro" \
+            caddy:2-alpine caddy validate --adapter caddyfile --config /site.caddy
+
+      - name: The vhost keeps no file logger
+        # A file log needs a directory writable by the unprivileged caddy user.
+        # Getting that wrong fails the reload, and the journal is right here.
+        run: |
+          if grep -qE '^\s*output\s+file' deploy/vps/icloud.caddy; then
+            echo "The vhost writes to a log file; use the journal instead."
+            exit 1
+          fi
+
+      - name: The Caddy vhost proxies the whole host, not just /mcp
+        # Scoping to /mcp 404s the OAuth handshake, which needs /.well-known,
+        # /authorize, /token, /register and /revoke as well.
+        run: |
+          grep -q 'reverse_proxy 127.0.0.1:8440' deploy/vps/icloud.caddy
+          if grep -qE '^\s*(handle|route|reverse_proxy)\s+/mcp' deploy/vps/icloud.caddy; then
+            echo "The vhost scopes routing to /mcp; the OAuth handshake would 404."
+            exit 1
+          fi
