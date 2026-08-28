@@ -60,6 +60,10 @@ else
     read -rp "    Confine Claude to which Drive folder? [/Claude]: " root_path
     root_path="${root_path:-/Claude}"
 
+    # Written in a subshell so the restrictive umask cannot leak into the
+    # files created later — the vhost in particular, which Caddy reads as an
+    # unprivileged user and cannot open at 0600.
+    (
     umask 077
     cat > "$ENV_FILE" <<ENV
 # Written by deploy-icloud-mcp.sh. Secrets are hex: no '\$' for Compose to eat.
@@ -83,8 +87,9 @@ ICLOUD_MAX_FILE_BYTES=0
 # only if the VPS has the RAM to spare alongside its other services.
 ICLOUD_MAX_READ_BYTES=10485760
 ENV
+    )
     chmod 0600 "$ENV_FILE"
-    note "wrote ${ENV_FILE}"
+    note "wrote ${ENV_FILE} (0600)"
 fi
 
 # ---------------------------------------------------------------- 3. build
@@ -95,8 +100,10 @@ note "icloud-drive-mcp:latest"
 # ------------------------------------------------------------- 4. compose
 step "Starting the container on 127.0.0.1:${PORT}"
 install -d -m 0755 "$APP"
-sed "s/127.0.0.1:8440:8000/127.0.0.1:${PORT}:8000/" \
-    "${HERE}/docker-compose.yml" > "${APP}/docker-compose.yml"
+tmp="$(mktemp)"
+sed "s/127.0.0.1:8440:8000/127.0.0.1:${PORT}:8000/" "${HERE}/docker-compose.yml" > "$tmp"
+install -m 0644 "$tmp" "${APP}/docker-compose.yml"
+rm -f "$tmp"
 docker compose -f "${APP}/docker-compose.yml" up -d --force-recreate >/dev/null
 note "container icloud-mcp"
 
@@ -126,11 +133,9 @@ if [ -f "$VHOST" ]; then
     cp "$VHOST" "$BACKUP"
 fi
 
-sed -e "s/icloud\.lopes\.me/${DOMAIN}/" -e "s/127\.0\.0\.1:8440/127.0.0.1:${PORT}/" \
-    "${HERE}/icloud.caddy" > "$VHOST"
-
 # Leaving a broken vhost behind would stop Caddy starting on the next reboot,
 # taking every other site on this box down with it. Always put it back.
+# Defined before anything that might call it.
 restore_vhost() {
     if [ -n "$BACKUP" ]; then
         cp "$BACKUP" "$VHOST"
@@ -139,6 +144,23 @@ restore_vhost() {
     fi
     systemctl reload caddy >/dev/null 2>&1 || true
 }
+
+# install -m sets the mode regardless of the caller's umask. Caddy reloads as
+# an unprivileged user, so a 0600 vhost fails the import with "permission
+# denied" even though root wrote it happily.
+tmp_vhost="$(mktemp)"
+sed -e "s/icloud\.lopes\.me/${DOMAIN}/" -e "s/127\.0\.0\.1:8440/127.0.0.1:${PORT}/" \
+    "${HERE}/icloud.caddy" > "$tmp_vhost"
+install -m 0644 "$tmp_vhost" "$VHOST"
+rm -f "$tmp_vhost"
+
+# Prove the service account can actually read it, rather than finding out from
+# a failed reload.
+if id caddy >/dev/null 2>&1 && ! sudo -u caddy test -r "$VHOST" 2>/dev/null; then
+    restore_vhost
+    die "the caddy user cannot read ${VHOST}. Check the mode on it and on
+  /etc/caddy/conf.d — both must be readable by the account Caddy runs as."
+fi
 
 if ! caddy validate --config /etc/caddy/Caddyfile >/tmp/caddy-validate.log 2>&1; then
     printf '\n--- caddy validate ---\n'; tail -20 /tmp/caddy-validate.log
