@@ -1,12 +1,16 @@
-# Deploying to the Infomaniak VPS
+# Deploying to a VPS
 
-Puts the connector at `https://icloud.lopes.me/mcp`, alongside the vault
-connector (8420), CouchDB (5984), Glances (61208) and ats-mcp (8430). This one
-takes **8440**. Everything stays loopback-bound; Caddy is the only public entry
-point, and only 22 / 80 / 443 are open.
+Puts the connector at `https://icloud.example.com/mcp` on a host already
+running Caddy. It binds **8440** on loopback only; Caddy is the sole public
+entry point, and the firewall need expose nothing beyond 22 / 80 / 443.
+
+Written for a host that already serves other things. Nothing here assumes it
+has the machine to itself: the port is configurable, the container is capped,
+and the Caddy config is a single file in `conf.d` rather than an edit to
+anyone else's vhost.
 
 ```
-Claude (web / iPhone / iPad / Mac) ──HTTPS + OAuth 2.1──▶ icloud.lopes.me
+Claude (web / iPhone / iPad / Mac) ──HTTPS + OAuth 2.1──▶ icloud.example.com
                                                                 │
                                                           Caddy :443
                                                                 │
@@ -19,17 +23,18 @@ Claude (web / iPhone / iPad / Mac) ──HTTPS + OAuth 2.1──▶ icloud.lopes
 
 ## Before you start
 
-DNS first, dual-stack, matching the sibling hosts:
+DNS first, and dual-stack if the host has IPv6. Point the records at the
+machine you are deploying to:
 
 | Record | Value |
 |---|---|
-| A | `179.237.107.22` |
-| AAAA | `2001:1600:18:207::190` |
+| A | the host's public IPv4 address |
+| AAAA | its public IPv6 address, if it has one |
 
 Then, on the VPS:
 
 ```bash
-./check-ipv6.sh icloud.lopes.me
+./check-ipv6.sh icloud.example.com
 ```
 
 Read-only. It checks both records resolve, that the host answers on IPv6 if an
@@ -55,7 +60,7 @@ links you need.
 1. **Sign in to Apple** at the `/admin/login?token=…` link it prints. The token
    moves into a cookie and leaves the address bar immediately.
 2. **Add the connector** in Claude: Settings → Connectors → Add custom
-   connector → `https://icloud.lopes.me/mcp`. Leave the OAuth client ID and
+   connector → `https://icloud.example.com/mcp`. Leave the OAuth client ID and
    secret blank. The consent screen asks for the passphrase it printed.
 
 Connectors are an account setting, so it appears on iPhone and iPad on its own.
@@ -66,8 +71,8 @@ Connectors are an account setting, so it appears on iPhone and iPad on its own.
 |---|---|
 | Logs | `docker logs icloud-mcp --tail 50` |
 | Restart | `docker compose -f /opt/icloud-mcp/docker-compose.yml restart` |
-| Redeploy | `/opt/icloud-mcp-src/deploy/infomaniak/deploy-icloud-mcp.sh` |
-| Session health | `curl -s https://icloud.lopes.me/status -H "Authorization: Bearer $ADMIN_TOKEN"` |
+| Redeploy | `/opt/icloud-mcp-src/deploy/vps/deploy-icloud-mcp.sh` |
+| Session health | `curl -s https://icloud.example.com/status -H "Authorization: Bearer $ADMIN_TOKEN"` |
 | Config | `/etc/icloud-mcp/icloud-mcp.env` (0600) |
 | Change the folder Claude sees | edit `ICLOUD_ROOT_PATH` in that file, then recreate |
 | Verbose logs | add `ICLOUD_MCP_LOG_LEVEL=DEBUG` to that file, then restart |
@@ -149,7 +154,7 @@ this software's. Same `/admin/login` link. Nothing else has to change, and the
 connector stays configured in Claude throughout.
 
 The `icloud-mcp-data` volume holds the Apple session and the registered OAuth
-clients. Losing it only means signing in again, so like `ats-mcp-state` it is
+clients. Losing it only means signing in again, so it is
 deliberately **not** in the restic set.
 
 ## Footprint on the VPS
@@ -177,7 +182,7 @@ Two things keep that a ceiling rather than a per-request cost:
 
 The container is additionally held to `mem_limit: 512m`, roughly four times the
 measured peak. If anything here ever misbehaves, the kernel kills this
-container and CouchDB, the vault connector, ats-mcp and Glances carry on.
+container, and anything else on the host carries on.
 
 ## Traps already paid for
 
@@ -195,7 +200,7 @@ These come from the sibling deployments; the scripts here account for them.
   human flows need `/consent` and `/admin/*`. The vhost proxies the whole host,
   and CI fails if that ever gets narrowed.
 
-## One improvement over the vault connector
+## A note on the health check
 
 That one issued a 24-hour token with no refresh, so it went unreachable every
 day or two until the lifetime was stretched to ten years. This issues 1-hour

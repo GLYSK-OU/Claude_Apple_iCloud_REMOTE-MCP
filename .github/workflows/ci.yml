@@ -178,8 +178,8 @@ jobs:
         run: |
           bash -n install.sh
           test -x install.sh || { echo 'install.sh is not executable'; exit 1; }
-          bash -n deploy/infomaniak/deploy-icloud-mcp.sh
-          bash -n deploy/infomaniak/check-ipv6.sh
+          bash -n deploy/vps/deploy-icloud-mcp.sh
+          bash -n deploy/vps/check-ipv6.sh
           bash -n plugin/scripts/run-server.sh
           bash -n scripts/build-mcpb.sh
 
@@ -190,11 +190,11 @@ jobs:
           # it optional, CI supplies an empty one just to check the syntax.
           sudo mkdir -p /etc/icloud-mcp
           sudo touch /etc/icloud-mcp/icloud-mcp.env
-          docker compose -f deploy/infomaniak/docker-compose.yml config >/dev/null
+          docker compose -f deploy/vps/docker-compose.yml config >/dev/null
 
       - name: Compose keeps the hardening the image relies on
         run: |
-          rendered=$(docker compose -f deploy/infomaniak/docker-compose.yml config)
+          rendered=$(docker compose -f deploy/vps/docker-compose.yml config)
           # Compose normalises values, so match the rendered form, not the source.
           # A hard memory ceiling matters as much as the other hardening: it is
           # what keeps a runaway read inside this container instead of starving
@@ -211,14 +211,14 @@ jobs:
         # This file is only ever parsed on the VPS, where a syntax error means a
         # failed reload during a deploy. Parse it here instead.
         run: |
-          docker run --rm -v "$PWD/deploy/infomaniak/icloud.caddy:/site.caddy:ro" \
+          docker run --rm -v "$PWD/deploy/vps/icloud.caddy:/site.caddy:ro" \
             caddy:2-alpine caddy validate --adapter caddyfile --config /site.caddy
 
       - name: The vhost keeps no file logger
         # A file log needs a directory writable by the unprivileged caddy user.
         # Getting that wrong fails the reload, and the journal is right here.
         run: |
-          if grep -qE '^\s*output\s+file' deploy/infomaniak/icloud.caddy; then
+          if grep -qE '^\s*output\s+file' deploy/vps/icloud.caddy; then
             echo "The vhost writes to a log file; use the journal instead."
             exit 1
           fi
@@ -227,8 +227,8 @@ jobs:
         # Scoping to /mcp 404s the OAuth handshake, which needs /.well-known,
         # /authorize, /token, /register and /revoke as well.
         run: |
-          grep -q 'reverse_proxy 127.0.0.1:8440' deploy/infomaniak/icloud.caddy
-          if grep -qE '^\s*(handle|route|reverse_proxy)\s+/mcp' deploy/infomaniak/icloud.caddy; then
+          grep -q 'reverse_proxy 127.0.0.1:8440' deploy/vps/icloud.caddy
+          if grep -qE '^\s*(handle|route|reverse_proxy)\s+/mcp' deploy/vps/icloud.caddy; then
             echo "The vhost scopes routing to /mcp; the OAuth handshake would 404."
             exit 1
           fi

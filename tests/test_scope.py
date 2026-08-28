@@ -450,7 +450,7 @@ def test_the_deploy_script_asks_nothing_when_driven():
     import pathlib
 
     deploy = (
-        pathlib.Path(__file__).resolve().parents[1] / "deploy" / "infomaniak" / "deploy-icloud-mcp.sh"
+        pathlib.Path(__file__).resolve().parents[1] / "deploy" / "vps" / "deploy-icloud-mcp.sh"
     ).read_text()
 
     guarded = deploy.count('if [ -n "${ICLOUD_MCP_NONINTERACTIVE:-}" ]; then')
@@ -508,7 +508,7 @@ def test_the_installer_and_deploy_agree_on_where_the_source_lives():
 
     root = pathlib.Path(__file__).resolve().parents[1]
     installer = (root / "install.sh").read_text()
-    deploy = (root / "deploy" / "infomaniak" / "deploy-icloud-mcp.sh").read_text()
+    deploy = (root / "deploy" / "vps" / "deploy-icloud-mcp.sh").read_text()
 
     expected = f"https://github.com/GLYSK-OU/{REPO_NAME}.git"
     assert expected in installer
@@ -561,3 +561,88 @@ def test_the_name_is_an_identifier_and_the_title_carries_the_branding(config):
 
     assert " " not in mcp.name
     assert "Apple iCloud" in (mcp.title or "")
+
+
+# ------------------------------------------- nothing personal in a public repo
+
+
+PRIVATE_PATTERNS = (
+    r"\blopes\.me\b",
+    r"\binfomaniak\b",
+    r"\bov-[a-z0-9]{6}\b",
+    # The specific host inventory that was published: naming what else runs
+    # on a machine hands a targeted attacker a map they would have to guess at.
+    r"\bcouchdb\b",
+    r"\bglances\b",
+    r"\bats-mcp\b",
+    r"\bobsidian-web-mcp\b",
+    # Any literal public IPv4 outside the documentation ranges. 160.79.104.0/21
+    # is exempt: that is Anthropic's own published egress range, allow-listed in
+    # the Caddy config, and belongs to them rather than to whoever deploys this.
+    r"\b(?!127\.|0\.|10\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|160\.79\.10[4-9]\.|160\.79\.11[01]\.)"
+    r"(?:[1-9]\d{0,2})\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+)
+
+
+def test_no_tracked_file_names_a_real_deployment():
+    """This repository is public. A deployment guide written from one real
+    machine leaks that machine: its address, its provider, and — worst — an
+    inventory of the other services on it. None of that is needed to explain
+    how to deploy, and all of it is reconnaissance for someone targeting the
+    author.
+    """
+    import pathlib
+    import re
+    import subprocess
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+
+    offenders: list[str] = []
+    for name in tracked:
+        if name == "tests/test_scope.py":  # this file names the patterns
+            continue
+        try:
+            text = (root / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for pattern in PRIVATE_PATTERNS:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                offenders.append(f"{name}: {match.group(0)!r}")
+
+    assert not offenders, "private deployment details in a public repo: " + "; ".join(offenders)
+
+
+def test_the_documented_domain_is_a_reserved_example():
+    """example.com is reserved by RFC 2606 precisely so documentation cannot
+    accidentally point at somebody's real host."""
+    import pathlib
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "vps" / "README.md").read_text()
+
+    assert "icloud.example.com" in readme
+    assert "example.com" in readme
+
+
+def test_the_vhost_template_and_its_substitution_agree():
+    """The deploy script rewrites the domain into the Caddy vhost by matching
+    the placeholder. Rename one without the other and every deployment gets a
+    vhost for the wrong host, which fails as a certificate error far from the
+    cause."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "vps"
+    vhost = (root / "icloud.caddy").read_text()
+    deploy = (root / "deploy-icloud-mcp.sh").read_text()
+
+    placeholder = re.search(r"^([a-z0-9.-]+\.example\.com)\s*\{", vhost, re.M)
+    assert placeholder, "the vhost must carry an example.com placeholder"
+
+    escaped = placeholder.group(1).replace(".", r"\.")
+    assert f"s/{escaped}/${{DOMAIN}}/" in deploy, (
+        f"the deploy script does not substitute {placeholder.group(1)!r}"
+    )

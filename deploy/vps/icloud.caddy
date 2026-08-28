@@ -7,7 +7,7 @@
 # flows need /consent, /admin/* and /status. Scoping this to /mcp alone 404s
 # the handshake and the connector never finishes connecting.
 
-icloud.lopes.me {
+icloud.example.com {
 	encode zstd gzip
 
 	# Anthropic reaches this from 160.79.104.0/21; browsers reach the consent

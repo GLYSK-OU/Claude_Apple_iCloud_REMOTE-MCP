@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# Deploys the iCloud Drive MCP connector to the Infomaniak VPS.
+# Deploys the iCloud Drive MCP connector to a VPS running Caddy.
 #
 # Idempotent: safe to re-run after a code change, and re-running never
 # regenerates secrets that already exist. Follows the pattern already used by
-# obsidian-web-mcp (8420) and ats-mcp (8430); this one takes 8440.
+# Binds 8440 on loopback by default; override with ICLOUD_MCP_PORT if taken.
 #
 #   sudo ./deploy-icloud-mcp.sh
 #
-# Then point Claude at https://icloud.lopes.me/mcp.
+# Then point Claude at https://icloud.example.com/mcp.
 
 set -euo pipefail
 
-DOMAIN="${ICLOUD_MCP_DOMAIN:-icloud.lopes.me}"
+DOMAIN="${ICLOUD_MCP_DOMAIN:-icloud.example.com}"
 PORT="${ICLOUD_MCP_PORT:-8440}"
 SRC="/opt/icloud-mcp-src"
 APP="/opt/icloud-mcp"
@@ -168,7 +168,7 @@ restore_vhost() {
 # an unprivileged user, so a 0600 vhost fails the import with "permission
 # denied" even though root wrote it happily.
 tmp_vhost="$(mktemp)"
-sed -e "s/icloud\.lopes\.me/${DOMAIN}/" -e "s/127\.0\.0\.1:8440/127.0.0.1:${PORT}/" \
+sed -e "s/icloud\.example\.com/${DOMAIN}/" -e "s/127\.0\.0\.1:8440/127.0.0.1:${PORT}/" \
     "${HERE}/icloud.caddy" > "$tmp_vhost"
 install -m 0644 "$tmp_vhost" "$VHOST"
 rm -f "$tmp_vhost"
@@ -243,7 +243,7 @@ $(printf '\033[1mDeployed.\033[0m')
   Day 2:
     logs      docker logs icloud-mcp --tail 50
     restart   docker compose -f ${APP}/docker-compose.yml restart
-    redeploy  ${SRC}/deploy/infomaniak/deploy-icloud-mcp.sh
+    redeploy  ${SRC}/deploy/vps/deploy-icloud-mcp.sh
     status    curl -s https://${DOMAIN}/status -H "Authorization: Bearer ${admin_token}"
     secrets   ${ENV_FILE}
 

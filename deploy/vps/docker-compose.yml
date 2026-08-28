@@ -27,7 +27,7 @@ services:
     # A hard ceiling, so that even a misconfigured read ceiling or a leak can
     # only ever kill this container. Measured peak for the largest permitted
     # read is ~120 MB, and operations are serialised, so 512 MB is roughly 4x
-    # headroom — while guaranteeing CouchDB and the sibling connectors on this
+    # headroom — while guaranteeing that anything else running on this
     # VPS cannot be starved by anything happening here.
     mem_limit: 512m
     memswap_limit: 512m

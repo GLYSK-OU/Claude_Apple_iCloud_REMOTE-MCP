@@ -205,7 +205,7 @@ phase_done
 # Everything from here is what deploy-icloud-mcp.sh already does well, and
 # duplicating it would mean two things to keep correct. Run it with the
 # answers already gathered so it asks nothing.
-DEPLOY="${SRC}/deploy/infomaniak/deploy-icloud-mcp.sh"
+DEPLOY="${SRC}/deploy/vps/deploy-icloud-mcp.sh"
 [ -x "$DEPLOY" ] || die "The deploy script is missing from the checkout."
 
 phase   # secrets

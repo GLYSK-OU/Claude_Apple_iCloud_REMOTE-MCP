@@ -7,7 +7,7 @@
 # outright — the sibling deployment on this VPS learned that the hard way.
 
 set -uo pipefail
-HOST="${1:-icloud.lopes.me}"
+HOST="${1:-icloud.example.com}"
 fail=0
 
 say() { printf '%s\n' "$*"; }
