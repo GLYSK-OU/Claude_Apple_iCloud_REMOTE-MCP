@@ -73,7 +73,16 @@ class NodeInfo:
     modified: str | None
     changed: str | None
     etag: str | None
-    docwsid: str | None
+    # Apple's own identifier for the node. `drivewsid`, not `docwsid`: every
+    # app library carries the literal docwsid "documents", so a Pages folder
+    # and an Obsidian folder are indistinguishable by it. `drivewsid` embeds
+    # the zone (FOLDER::com.apple.Pages::documents) and is unique.
+    node_id: str | None
+    # The iCloud container a node lives in — com.apple.CloudDocs for ordinary
+    # files, or the app's own zone for the per-app libraries Finder merges
+    # into one view. Two same-named files in different zones are different
+    # files, and nothing else in the payload says so.
+    zone: str | None
     # Set when a read deliberately stopped short of the whole file.
     truncated: bool = False
     bytes_returned: int | None = None
@@ -87,7 +96,8 @@ class NodeInfo:
             "modified": self.modified,
             "changed": self.changed,
             "etag": self.etag,
-            "id": self.docwsid,
+            "id": self.node_id,
+            "zone": self.zone,
         }
 
 
@@ -295,7 +305,8 @@ class DriveClient:
             modified=_iso(node.date_modified),
             changed=_iso(node.date_changed),
             etag=node.data.get("etag"),
-            docwsid=node.data.get("docwsid"),
+            node_id=node.data.get("drivewsid") or node.data.get("docwsid"),
+            zone=node.data.get("zone"),
         )
 
     def _require_writable(self) -> None:

@@ -480,3 +480,107 @@ def test_status_says_when_the_configured_root_does_not_exist(config, monkeypatch
     assert status["root_exists"] is False
     assert "/Y" in status["error"]
     assert "ICLOUD_ROOT_PATH" in status["error"]
+
+
+# ------------------------------- an entry's id has to identify the entry
+
+
+def _node_payloads():
+    """Shapes taken verbatim from a live account's root listing."""
+    return {
+        # An ordinary folder: docwsid is a UUID, so it happens to be unique.
+        "Downloads": {
+            "drivewsid": "FOLDER::com.apple.CloudDocs::1AA08F27-FAA1-4C86-88B2-2E9A1F64D514",
+            "docwsid": "1AA08F27-FAA1-4C86-88B2-2E9A1F64D514",
+            "zone": "com.apple.CloudDocs",
+            "name": "Downloads",
+            "type": "FOLDER",
+            "etag": "t9cn",
+        },
+        # App libraries: Apple sets docwsid to the literal "documents" on
+        # every one of them. Only drivewsid carries the zone that tells the
+        # Pages library apart from the Obsidian one.
+        "Pages": {
+            "drivewsid": "FOLDER::com.apple.Pages::documents",
+            "docwsid": "documents",
+            "zone": "com.apple.Pages",
+            "name": "Pages",
+            "type": "APP_LIBRARY",
+            "etag": "go",
+        },
+        "Obsidian": {
+            "drivewsid": "FOLDER::iCloud.md.obsidian::documents",
+            "docwsid": "documents",
+            "zone": "iCloud.md.obsidian",
+            "name": "Obsidian",
+            "type": "APP_LIBRARY",
+            "etag": "9u3",
+        },
+    }
+
+
+class _RawNode:
+    def __init__(self, data):
+        self.data = data
+        self.name = data["name"]
+        self.type = data["type"].lower()
+        self.size = None
+        self.date_modified = None
+        self.date_changed = None
+
+
+def test_app_libraries_do_not_all_share_one_id(config):
+    """Fourteen app containers each reported id "documents" — Apple's own
+    docwsid for all of them. Anything keying on it would treat Pages, Numbers
+    and Obsidian as the same folder."""
+    from icloud_drive_mcp.drive import DriveClient
+    from icloud_drive_mcp.paths import DrivePath
+
+    client = DriveClient(config)
+    payloads = _node_payloads()
+    ids = {
+        name: client._info(_RawNode(data), DrivePath((name,))).as_dict()["id"]
+        for name, data in payloads.items()
+    }
+
+    assert len(set(ids.values())) == len(ids), f"ids collide: {ids}"
+    assert ids["Pages"] != ids["Obsidian"]
+    assert "documents" not in set(ids.values()), "the bare docwsid is not an identifier"
+
+
+def test_the_id_is_apples_own_unique_handle(config):
+    from icloud_drive_mcp.drive import DriveClient
+    from icloud_drive_mcp.paths import DrivePath
+
+    client = DriveClient(config)
+    info = client._info(_RawNode(_node_payloads()["Pages"]), DrivePath(("Pages",))).as_dict()
+
+    assert info["id"] == "FOLDER::com.apple.Pages::documents"
+
+
+def test_the_zone_is_reported(config):
+    """Finder merges the per-app containers into one iCloud Drive view, so the
+    zone is the only thing saying which store an entry actually lives in."""
+    from icloud_drive_mcp.drive import DriveClient
+    from icloud_drive_mcp.paths import DrivePath
+
+    client = DriveClient(config)
+    payloads = _node_payloads()
+
+    def zone_of(name):
+        return client._info(_RawNode(payloads[name]), DrivePath((name,))).as_dict()["zone"]
+
+    assert zone_of("Downloads") == "com.apple.CloudDocs"
+    assert zone_of("Pages") == "com.apple.Pages"
+    assert zone_of("Obsidian") == "iCloud.md.obsidian"
+
+
+def test_an_ordinary_folder_keeps_a_stable_id(config):
+    """The fix must not churn identifiers for the nodes that were already fine."""
+    from icloud_drive_mcp.drive import DriveClient
+    from icloud_drive_mcp.paths import DrivePath
+
+    client = DriveClient(config)
+    info = client._info(_RawNode(_node_payloads()["Downloads"]), DrivePath(("Downloads",))).as_dict()
+
+    assert info["id"].endswith("1AA08F27-FAA1-4C86-88B2-2E9A1F64D514")
