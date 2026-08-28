@@ -137,9 +137,25 @@ npm install -g @anthropic-ai/mcpb
 ./scripts/build-mcpb.sh          # writes dist/icloud-drive.mcpb
 ```
 
-**Requirements:** macOS or Windows, and Python 3.11+. The bundle uses the UV
-runtime, so dependencies resolve at install time rather than shipping compiled
-wheels that would not be portable.
+**Requirements:** macOS or Windows, and Python 3.11 or newer. Check before you
+install:
+
+```bash
+python3 --version
+```
+
+The bundle uses the UV runtime, so dependencies resolve at install time rather
+than shipping compiled wheels that would not be portable across platforms.
+
+> **If Claude Desktop refuses the bundle as incompatible**, it is looking at
+> your *system* Python, not the one UV would fetch. macOS ships 3.9 by default,
+> which is too old. Install a newer one — `brew install python@3.12` — and
+> retry. This is a known gap in Desktop's pre-install check
+> ([mcpb#84](https://github.com/modelcontextprotocol/mcpb/issues/84), closed as
+> not planned), not something this bundle can work around.
+>
+> Claude Desktop ships its own Node.js but not Python, which is why Node
+> extensions never hit this and Python ones can.
 
 ---
 
@@ -495,6 +511,10 @@ web form.
 start. Check the `/plugin` manager's **Errors** tab. The usual cause is Python
 3.11+ missing from `PATH`; the first run also needs network access to PyPI to
 build its virtualenv.
+
+**Desktop: the extension will not install, or says it is incompatible** — see
+the Python note under [desktop extension](#install-as-a-desktop-extension-claude-desktop).
+It is almost always a system Python older than 3.11.
 
 **Desktop: the sign-in page will not open** — it binds to loopback on an
 ephemeral port, so open the exact link Claude gives you, on the same machine.
