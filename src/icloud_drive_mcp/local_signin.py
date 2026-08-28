@@ -220,7 +220,8 @@ class LocalSignInServer:
 
     def _form_page(self, stage: str, message: str) -> Response:
         if stage == "code":
-            return signin_code_page(self._action(), message)
+            delivery = self._pending.delivery_method if self._pending else ""
+            return signin_code_page(self._action(), message, delivery)
         return signin_password_page(self._config.apple_id, self._action(), message, local=True)
 
     def _done_page(self, message: str) -> Response:

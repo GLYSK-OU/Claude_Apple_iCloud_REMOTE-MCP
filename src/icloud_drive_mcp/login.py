@@ -101,12 +101,28 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
     # the user back to the password form — and their next attempt makes Apple
     # send a *second* code. Landing on the code screen costs nothing if no code
     # arrived: there is a resend button there.
+    # Log the route Apple is offering before asking it to send anything. When a
+    # code never arrives, this is the line that says why — and it is the only
+    # view onto it, since Apple reports nothing to the browser.
+    LOGGER.info(
+        "Two-factor requested: delivery=%s trusted_devices=%s security_keys=%s",
+        getattr(api, "two_factor_delivery_method", "unknown"),
+        len(getattr(api, "trusted_devices", []) or []),
+        getattr(api, "security_key_names", None),
+    )
+
     notice: str | None = None
     try:
         if not api.request_2fa_code():
+            LOGGER.warning(
+                "Apple declined to send a code (delivery=%s). It usually means the account "
+                "wants a security key, or Apple is throttling repeated requests.",
+                getattr(api, "two_factor_delivery_method", "unknown"),
+            )
             notice = (
-                "Apple did not confirm that it sent a code. Check your trusted devices — if "
-                "one arrived, enter it below; otherwise use Send a new code."
+                "Apple declined to send a code just now. This is usually temporary — Apple "
+                "throttles repeated sign-in attempts. Wait a few minutes, then use Send a "
+                "new code. If a code did arrive, enter it below."
             )
     except PyiCloudNoTrustedNumberAvailable:
         notice = (
@@ -123,12 +139,14 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
             "devices, enter it below; otherwise use Send a new code."
         )
 
-    return PendingLogin(
+    pending = PendingLogin(
         api=api,
         apple_id=apple_id,
         delivery_method=getattr(api, "two_factor_delivery_method", "unknown"),
         notice=notice or getattr(api, "two_factor_delivery_notice", None),
     )
+    LOGGER.info("Two-factor pending: delivery=%s notice=%s", pending.delivery_method, pending.notice)
+    return pending
 
 
 def resend_code(pending: PendingLogin) -> str:
@@ -138,9 +156,14 @@ def resend_code(pending: PendingLogin) -> str:
     which is both annoying and the thing that made Apple send two codes in the
     first place.
     """
+    LOGGER.info("Resending the two-factor code (delivery=%s)", pending.delivery_method)
     try:
         if not pending.api.request_2fa_code():
-            return "Apple would not send another code. Check your trusted devices."
+            LOGGER.warning("Apple declined the resend (delivery=%s)", pending.delivery_method)
+            return (
+                "Apple declined to send another code. It throttles repeated requests, so "
+                "wait a few minutes and try again."
+            )
     except (
         PyiCloudNoTrustedNumberAvailable,
         PyiCloudTrustedDevicePromptException,

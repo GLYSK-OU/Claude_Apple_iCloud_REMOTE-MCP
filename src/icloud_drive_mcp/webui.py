@@ -295,7 +295,7 @@ def signin_password_page(apple_id: str, action: str, message: str = "", local: b
     )
 
 
-def signin_code_page(action: str, message: str = "") -> HTMLResponse:
+def signin_code_page(action: str, message: str = "", delivery: str = "") -> HTMLResponse:
     """Apple-style six-box code entry, shared by both flows."""
     boxes = "".join(
         # No maxlength: it truncates an autofilled code to one character before
@@ -307,15 +307,29 @@ def signin_code_page(action: str, message: str = "") -> HTMLResponse:
         for i in range(6)
     )
     kind = "ok" if "sent" in message.lower() else "error"
+    # Apple pushes the code to trusted devices as part of the sign-in itself,
+    # before anything here asks it to. Saying "we sent you a code" invites the
+    # user to wait for a second one that is never coming, so point them at the
+    # devices instead.
+    sent_where = {
+        "sms": "Apple has sent a six-digit code by SMS. Check your phone.",
+    }.get(
+        delivery,
+        "Apple sends the code to your trusted Apple devices as you sign in. "
+        "Check them now — it may already be waiting.",
+    )
+    route = (
+        f'<p class="note">Apple is delivering this by <strong>{html.escape(delivery)}</strong>. '
+        "Send a new code asks for another; Apple often declines that if one is already in "
+        "flight, or if there have been several attempts recently.</p>"
+        if delivery and delivery != "unknown"
+        else ""
+    )
     return page(
         "Verification code",
         f"""
         <h1>Enter the code Apple sent</h1>
-        {
-            alert(message, kind)
-            if message
-            else '<p class="lead">Apple has sent a six-digit code to your trusted devices.</p>'
-        }
+        {alert(message, kind) if message else f'<p class="lead">{sent_where}</p>'}
         <form method="post" action="{action}" id="f">
           <input type="hidden" name="step" value="code">
           <div class="codes">{boxes}</div>
@@ -325,6 +339,7 @@ def signin_code_page(action: str, message: str = "") -> HTMLResponse:
           <input type="hidden" name="step" value="resend">
           <button type="submit" class="secondary">Send a new code</button>
         </form>
+        {route}
         <p class="note">Apple sent this code, not GLYSK. If you did not just start this
            sign-in, close this page and change your Apple ID password.</p>
         """,

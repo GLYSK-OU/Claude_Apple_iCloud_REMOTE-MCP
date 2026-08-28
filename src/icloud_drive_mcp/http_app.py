@@ -340,7 +340,8 @@ def _register_admin(
 
         action = "/admin/login"
         if stage == "code":
-            return signin_code_page(action, message)
+            current = pending.take()
+            return signin_code_page(action, message, current.delivery_method if current else "")
         return signin_password_page(config.apple_id, action, message, local=False)
 
     _ = admin_login
