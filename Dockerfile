@@ -10,10 +10,19 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
+# Never root. A container holding a live iCloud session should not be able to
+# write outside its own volume, and a host bind-mount has to be owned by a uid
+# the container actually runs as — mismatched ownership is a silent start-up
+# failure that looks like a config bug.
+RUN groupadd --system --gid 10001 icloud \
+    && useradd --system --uid 10001 --gid 10001 --home /home/icloud --create-home icloud
+
 # The Apple session and OAuth store live here. Mount a volume, or every
 # restart needs a fresh two-factor code and reconnecting the Claude connector.
-RUN mkdir -p /data
+RUN mkdir -p /data && chown -R 10001:10001 /data
 VOLUME ["/data"]
+
+USER 10001:10001
 
 ENV ICLOUD_SESSION_DIR=/data/icloud-session \
     OAUTH_STORE_PATH=/data/oauth-store.json \
