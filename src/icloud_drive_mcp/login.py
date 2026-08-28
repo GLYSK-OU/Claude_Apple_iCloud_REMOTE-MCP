@@ -58,6 +58,27 @@ class PendingLogin:
         return time.time() - self.created_at > PENDING_TTL_SECONDS
 
 
+def _log_two_factor_route(api: PyiCloudService) -> None:
+    """Record which route Apple is offering, for when a code never arrives.
+
+    Read only attributes backed by local state. Several `pyicloud` properties
+    are network calls wearing an attribute's clothes — `trusted_devices` does a
+    session.get against a legacy endpoint that 421s on a modern account, and
+    reading it from a log statement took down the whole sign-in. Diagnostics
+    must never be able to do that, so this is also belt-and-braces wrapped.
+    """
+    try:
+        LOGGER.info(
+            "Two-factor route: delivery=%s security_keys=%s requires_2fa=%s requires_2sa=%s",
+            getattr(api, "two_factor_delivery_method", "unknown"),
+            getattr(api, "security_key_names", None),
+            getattr(api, "requires_2fa", None),
+            getattr(api, "requires_2sa", None),
+        )
+    except Exception as exc:  # noqa: BLE001 - a log line may never break sign-in
+        LOGGER.debug("Could not log the two-factor route: %s", exc)
+
+
 def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | None:
     """Do the password step. Returns None when no 2FA code is needed."""
     if not apple_id:
@@ -101,15 +122,7 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
     # the user back to the password form — and their next attempt makes Apple
     # send a *second* code. Landing on the code screen costs nothing if no code
     # arrived: there is a resend button there.
-    # Log the route Apple is offering before asking it to send anything. When a
-    # code never arrives, this is the line that says why — and it is the only
-    # view onto it, since Apple reports nothing to the browser.
-    LOGGER.info(
-        "Two-factor requested: delivery=%s trusted_devices=%s security_keys=%s",
-        getattr(api, "two_factor_delivery_method", "unknown"),
-        len(getattr(api, "trusted_devices", []) or []),
-        getattr(api, "security_key_names", None),
-    )
+    _log_two_factor_route(api)
 
     notice: str | None = None
     try:

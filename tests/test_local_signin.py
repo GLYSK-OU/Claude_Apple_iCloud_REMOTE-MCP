@@ -435,3 +435,51 @@ def test_the_code_page_offers_a_resend():
     body = signin_code_page("/admin/login").body.decode()
     assert 'value="resend"' in body
     assert "Send a new code" in body
+
+
+# ---------------------------------------- diagnostics may never make network calls
+
+
+class _FakeAPINetworkTrap(_FakeAPI2FA):
+    """Apple client where the legacy 2SA properties behave as they really do.
+
+    On a modern HSA2 account `trusted_devices` is not an attribute at all — it
+    is a property that does a session.get against a legacy endpoint and raises
+    a 421. Reading one from a log statement is what took sign-in down once.
+    """
+
+    def __init__(self):
+        super().__init__(lambda: True)
+
+    @property
+    def trusted_devices(self):
+        raise AssertionError("trusted_devices is a network call and must not be read")
+
+    @property
+    def devices(self):
+        raise AssertionError("devices is a network call and must not be read")
+
+
+def test_sign_in_never_reads_a_network_backed_property(config, monkeypatch):
+    """`getattr(api, "trusted_devices", [])` does not protect you: the default
+    only applies when the attribute is missing, not when the property raises."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPINetworkTrap()
+    monkeypatch.setattr(login, "PyiCloudService", lambda **kw: api)
+
+    pending = login.start_login(config, "a@b.c", "pw")
+    assert pending is not None
+    assert api.requests == 1
+
+
+def test_a_broken_diagnostic_cannot_break_sign_in(config, monkeypatch, caplog):
+    """Belt and braces: even if a future edit reads something that raises."""
+    from icloud_drive_mcp import login
+
+    class _Exploding:
+        @property
+        def two_factor_delivery_method(self):
+            raise RuntimeError("421 Missing X-APPLE-WEBAUTH-HSA-LOGIN cookie")
+
+    login._log_two_factor_route(_Exploding())  # must not raise
