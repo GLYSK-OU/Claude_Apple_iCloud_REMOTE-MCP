@@ -155,9 +155,7 @@ async def test_no_static_token_configured_means_none_is_accepted(tmp_path):
 
 
 async def test_expired_access_token_is_rejected(tmp_path):
-    quick = OwnerPasswordOAuthProvider(
-        store_path=tmp_path / "s.json", gate_password="p", access_token_ttl=-1
-    )
+    quick = OwnerPasswordOAuthProvider(store_path=tmp_path / "s.json", gate_password="p", access_token_ttl=-1)
     client = make_client()
     await quick.register_client(client)
     request_id = (await quick.authorize(client, make_params())).split("=", 1)[1]

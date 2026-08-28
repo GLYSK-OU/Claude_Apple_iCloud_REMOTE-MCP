@@ -133,9 +133,7 @@ class DriveClient:
             raise NotAuthenticatedError(str(exc), config.signin_remedy) from exc
 
         if api.requires_2fa or api.requires_2sa:
-            raise NotAuthenticatedError(
-                "Apple is asking for a new two-factor code.", config.signin_remedy
-            )
+            raise NotAuthenticatedError("Apple is asking for a new two-factor code.", config.signin_remedy)
         return api
 
     def _client(self) -> PyiCloudService:
@@ -155,9 +153,11 @@ class DriveClient:
         answer, not an exception, and the remedy text belongs in the payload.
         """
         with self._lock:
-            cookie_files = sorted(p.name for p in self._config.session_dir.glob("*")) if (
-                self._config.session_dir.exists()
-            ) else []
+            cookie_files = (
+                sorted(p.name for p in self._config.session_dir.glob("*"))
+                if (self._config.session_dir.exists())
+                else []
+            )
             base = {
                 "apple_id": self._config.apple_id or None,
                 "session_dir": str(self._config.session_dir),
@@ -257,9 +257,7 @@ class DriveClient:
 
     # ---------------------------------------------------------------- reading
 
-    def list_directory(
-        self, raw_path: str, limit: int, offset: int, sort_by: str = "name"
-    ) -> dict[str, Any]:
+    def list_directory(self, raw_path: str, limit: int, offset: int, sort_by: str = "name") -> dict[str, Any]:
         path = self._parse(raw_path)
         with self._lock:
             node = self._resolve_dir(path, refresh=True)
@@ -269,7 +267,7 @@ class DriveClient:
         if sort_by == "modified":
             infos.sort(key=lambda i: (i.modified or "", i.name.lower()), reverse=True)
         elif sort_by == "size":
-            infos.sort(key=lambda i: (i.size or 0), reverse=True)
+            infos.sort(key=lambda i: i.size or 0, reverse=True)
         else:
             # Folders first, then files, each alphabetically — matches Finder.
             infos.sort(key=lambda i: (i.type != "folder", i.name.lower()))
@@ -458,9 +456,7 @@ class DriveClient:
                 existing = next((c for c in parent.get_children(force=True) if c.name == name), None)
                 if existing is not None:
                     if existing.type == "file":
-                        raise NotADirectoryError_(
-                            f"'{self._display(target)}' already exists as a file."
-                        )
+                        raise NotADirectoryError_(f"'{self._display(target)}' already exists as a file.")
                     if target == path and not exist_ok:
                         raise AlreadyExistsError(
                             f"'{self._display(target)}' already exists. Pass exist_ok=true to accept that."

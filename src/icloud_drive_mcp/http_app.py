@@ -23,6 +23,14 @@ from .config import Config
 from .drive import DriveClient
 from .login import LoginError, PendingLoginRegistry, finish_login, start_login
 from .oauth import OwnerPasswordOAuthProvider
+from .security import (
+    ADMIN_COOKIE,
+    SECURITY_HEADERS,
+    RateLimiter,
+    client_key,
+    constant_time_equals,
+    set_admin_cookie,
+)
 from .server import build_server
 
 LOGGER = logging.getLogger(__name__)
@@ -60,7 +68,11 @@ _PAGE = """<!doctype html>
 
 
 def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
-    return HTMLResponse(_PAGE.format(title=html.escape(title), body=body), status_code=status)
+    return HTMLResponse(
+        _PAGE.format(title=html.escape(title), body=body),
+        status_code=status,
+        headers=dict(SECURITY_HEADERS),
+    )
 
 
 def _alert(message: str, kind: str = "error") -> str:
@@ -74,9 +86,15 @@ def create_app(config: Config):
     assert isinstance(provider, OwnerPasswordOAuthProvider)
     pending_logins = PendingLoginRegistry()
 
-    _register_health(mcp, client, config)
-    _register_consent(mcp, provider)
-    _register_admin(mcp, client, config, pending_logins)
+    # Both screens sit one secret away from a live iCloud account, and they are
+    # counted separately so a locked-out consent attempt cannot also lock the
+    # operator out of the admin page.
+    consent_limiter = RateLimiter()
+    admin_limiter = RateLimiter()
+
+    _register_health(mcp, client, config, admin_limiter)
+    _register_consent(mcp, provider, consent_limiter)
+    _register_admin(mcp, client, config, pending_logins, admin_limiter)
 
     return mcp.streamable_http_app(streamable_http_path="/mcp", host=config.host)
 
@@ -84,7 +102,7 @@ def create_app(config: Config):
 # ------------------------------------------------------------------- health
 
 
-def _register_health(mcp, client: DriveClient, config: Config) -> None:
+def _register_health(mcp, client: DriveClient, config: Config, limiter: RateLimiter) -> None:
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
         """Liveness only — deliberately does not touch Apple, so a platform
@@ -94,26 +112,50 @@ def _register_health(mcp, client: DriveClient, config: Config) -> None:
     @mcp.custom_route("/status", methods=["GET"])
     async def status(request: Request) -> Response:
         """Session health. Guarded, because it names the Apple ID."""
+        wait = limiter.retry_after(client_key(request))
+        if wait:
+            return JSONResponse(
+                {"error": "too_many_attempts", "retry_after": wait},
+                status_code=429,
+                headers={"Retry-After": str(wait)},
+            )
         if not _admin_authorized(request, config):
+            limiter.record_failure(client_key(request))
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        limiter.record_success(client_key(request))
         payload: dict[str, Any] = await anyio.to_thread.run_sync(client.session_status)
-        return JSONResponse(payload)
+        return JSONResponse(payload, headers=dict(SECURITY_HEADERS))
 
     _ = (health, status)
+
+
+def _admin_credential(request: Request) -> str:
+    """The admin token the caller presented, by whichever route.
+
+    Cookie first, then Authorization, then the query string. The query string
+    is supported only to bootstrap a session from a pasted link; the handler
+    immediately swaps it for a cookie and redirects so the token stops
+    appearing in history, logs, and Referer headers.
+    """
+    cookie = request.cookies.get(ADMIN_COOKIE, "")
+    if cookie:
+        return cookie
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return request.query_params.get("token", "")
 
 
 def _admin_authorized(request: Request, config: Config) -> bool:
     if not config.admin_token:
         return False
-    header = request.headers.get("authorization", "")
-    token = header[7:] if header.lower().startswith("bearer ") else request.query_params.get("token", "")
-    return bool(token) and token == config.admin_token
+    return constant_time_equals(_admin_credential(request), config.admin_token)
 
 
 # ------------------------------------------------------------------ consent
 
 
-def _register_consent(mcp, provider: OwnerPasswordOAuthProvider) -> None:
+def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLimiter) -> None:
     @mcp.custom_route("/consent", methods=["GET", "POST"])
     async def consent(request: Request) -> Response:
         """The human step of the OAuth flow.
@@ -124,9 +166,7 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider) -> None:
         """
         form = await request.form() if request.method == "POST" else None
         request_id = str(
-            request.query_params.get("request_id")
-            or (form.get("request_id") if form else "")
-            or ""
+            request.query_params.get("request_id") or (form.get("request_id") if form else "") or ""
         )
 
         if not provider.gate_enabled:
@@ -141,20 +181,39 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider) -> None:
         if provider.take_pending(request_id) is None:
             return _page(
                 "Link expired",
-                "<h1>This sign-in link has expired</h1>"
-                "<p>Go back to Claude and start connecting again.</p>",
+                "<h1>This sign-in link has expired</h1><p>Go back to Claude and start connecting again.</p>",
                 status=400,
             )
 
         error = ""
+        caller = client_key(request)
+        wait = limiter.retry_after(caller)
+        if wait:
+            return _page(
+                "Too many attempts",
+                "<h1>Too many attempts</h1>"
+                f"<p>Wait {wait} seconds and start the connection again from Claude.</p>",
+                status=429,
+            )
+
         if form is not None:
             if form.get("action") == "deny":
                 redirect = provider.cancel_pending(request_id)
                 return RedirectResponse(redirect or "/", status_code=302)
             if provider.check_gate_password(str(form.get("password") or "")):
+                limiter.record_success(caller)
                 return RedirectResponse(provider.complete_pending(request_id), status_code=302)
+            locked = limiter.record_failure(caller)
+            LOGGER.warning("Rejected a consent attempt from %s with a bad gate password.", caller)
+            if locked:
+                return _page(
+                    "Too many attempts",
+                    "<h1>Too many attempts</h1>"
+                    f"<p>Locked for {locked // 60} minutes. Start the connection again from "
+                    "Claude after that.</p>",
+                    status=429,
+                )
             error = "That password did not match. Try again."
-            LOGGER.warning("Rejected a consent attempt with a bad gate password.")
 
         safe_id = html.escape(request_id)
         return _page(
@@ -184,7 +243,13 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider) -> None:
 # -------------------------------------------------------------------- admin
 
 
-def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLoginRegistry) -> None:
+def _register_admin(
+    mcp,
+    client: DriveClient,
+    config: Config,
+    pending: PendingLoginRegistry,
+    limiter: RateLimiter,
+) -> None:
     @mcp.custom_route("/admin/login", methods=["GET", "POST"])
     async def admin_login(request: Request) -> Response:
         """Re-authenticate with Apple from a browser.
@@ -201,15 +266,35 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
                 "<code>icloud-drive-mcp login</code> on the host instead.</p>",
                 status=503,
             )
+        caller = client_key(request)
+        wait = limiter.retry_after(caller)
+        if wait:
+            return _page(
+                "Too many attempts",
+                f"<h1>Too many attempts</h1><p>Wait {wait} seconds before trying again.</p>",
+                status=429,
+            )
         if not _admin_authorized(request, config):
+            limiter.record_failure(caller)
             return _page(
                 "Unauthorized",
                 "<h1>Admin token required</h1>"
-                "<p>Open this page as <code>/admin/login?token=YOUR_ADMIN_TOKEN</code>.</p>",
+                "<p>Open this page once as <code>/admin/login?token=YOUR_ADMIN_TOKEN</code>. "
+                "The token is then held in a session cookie and dropped from the address "
+                "bar, so it does not linger in your history.</p>",
                 status=401,
             )
+        limiter.record_success(caller)
 
-        token = html.escape(config.admin_token)
+        # The token arrived in the query string. Move it into a cookie and get
+        # it out of the URL before rendering anything, so it never reaches
+        # browser history, an access log, or a Referer header.
+        if request.query_params.get("token") and not request.cookies.get(ADMIN_COOKIE):
+            redirect = RedirectResponse("/admin/login", status_code=303)
+            set_admin_cookie(redirect, config.admin_token, secure=config.public_url.startswith("https://"))
+            for header, value in SECURITY_HEADERS.items():
+                redirect.headers[header] = value
+            return redirect
         apple_id_default = html.escape(config.apple_id)
         message = ""
         stage = "password"
@@ -221,14 +306,10 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
                 if step == "password":
                     apple_id = str(form.get("apple_id") or config.apple_id).strip()
                     password = str(form.get("password") or "")
-                    started = await anyio.to_thread.run_sync(
-                        start_login, config, apple_id, password
-                    )
+                    started = await anyio.to_thread.run_sync(start_login, config, apple_id, password)
                     if started is None:
                         client.reset()
-                        return _admin_done(
-                            token, "Signed in. The session was already trusted, no code needed."
-                        )
+                        return _admin_done("Signed in. The session was already trusted, no code needed.")
                     pending.set(started)
                     stage = "code"
                     message = started.notice or (
@@ -248,7 +329,6 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
                         pending.clear()
                         client.reset()
                         return _admin_done(
-                            token,
                             f"Signed in as {result['apple_id']}. "
                             f"iCloud Drive root has {result['root_entry_count']} entries.",
                         )
@@ -261,7 +341,7 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
             <h1>Enter the verification code</h1>
             <p>Apple sent a 6-digit code to your trusted devices.</p>
             {_alert(message, "ok" if "sent" in message.lower() else "error") if message else ""}
-            <form method="post" action="/admin/login?token={token}">
+            <form method="post" action="/admin/login">
               <input type="hidden" name="step" value="code">
               <label for="code">Verification code</label>
               <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
@@ -276,7 +356,7 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
         <p>This stores an Apple session on the server so Claude can reach iCloud Drive.
            Apple expires it roughly every 30 days.</p>
         {_alert(message) if message else ""}
-        <form method="post" action="/admin/login?token={token}">
+        <form method="post" action="/admin/login">
           <input type="hidden" name="step" value="password">
           <label for="apple_id">Apple ID</label>
           <input id="apple_id" name="apple_id" type="email" value="{apple_id_default}"
@@ -294,7 +374,7 @@ def _register_admin(mcp, client: DriveClient, config: Config, pending: PendingLo
     _ = admin_login
 
 
-def _admin_done(token: str, message: str) -> HTMLResponse:
+def _admin_done(message: str) -> HTMLResponse:
     return _page(
         "Signed in",
         f"""
@@ -302,6 +382,6 @@ def _admin_done(token: str, message: str) -> HTMLResponse:
         {_alert(message, "ok")}
         <p>Claude can now read and write this iCloud Drive. Come back to
            <code>/admin/login</code> when the session expires.</p>
-        <p class="note"><a href="/status?token={token}">View session status</a></p>
+        <p class="note"><a href="/status">View session status</a></p>
         """,
     )

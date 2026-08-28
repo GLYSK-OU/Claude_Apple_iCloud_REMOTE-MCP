@@ -322,7 +322,7 @@ Three levels, cheapest first. The first two need no Apple account.
 git clone -b <branch> https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git
 cd iCloud_Drive_2_Claude_Connector
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # expect: 85 passed
+.venv/bin/python -m pytest          # expect: 100 passed
 claude plugin validate .            # expect: Validation passed
 ```
 
@@ -377,7 +377,7 @@ so the connector cannot reach anything else.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest        # 85 tests, no Apple account needed
+.venv/bin/python -m pytest        # 100 tests, no Apple account needed
 .venv/bin/ruff check src tests
 ```
 
@@ -435,6 +435,22 @@ build its virtualenv.
 **Plugin tools vanished after an update** — run `/reload-plugins`. The launcher
 rebuilds its environment when the packaged code changes, which takes a moment
 on the first session after an update.
+
+## Security and privacy
+
+The connector can read, write, and delete every file in the Drive it is signed
+in to. [SECURITY.md](SECURITY.md) covers how to deploy it safely, what it does
+to protect itself, and the limitations it does not hide. Report vulnerabilities
+through a [private advisory](https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/security/advisories/new),
+not a public issue.
+
+It is self-hosted and sends the maintainers nothing — no telemetry, no
+analytics. See [PRIVACY.md](PRIVACY.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Tests run against a fake Drive, so you
+can work on almost everything without an Apple account.
 
 ## Licence
 

@@ -115,12 +115,8 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
         annotations=read_only,
     )
     async def icloud_list_directory(
-        path: Annotated[
-            str, Field(description="Folder to list, e.g. '/' or '/Documents/Invoices'.")
-        ] = "/",
-        limit: Annotated[
-            int, Field(description="Maximum entries to return.", ge=1, le=1000)
-        ] = 0,
+        path: Annotated[str, Field(description="Folder to list, e.g. '/' or '/Documents/Invoices'.")] = "/",
+        limit: Annotated[int, Field(description="Maximum entries to return.", ge=1, le=1000)] = 0,
         offset: Annotated[int, Field(description="Entries to skip, for paging.", ge=0)] = 0,
         sort_by: Annotated[
             Literal["name", "modified", "size"],
@@ -222,17 +218,13 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
         annotations=additive,
     )
     async def icloud_write_file(
-        path: Annotated[
-            str, Field(description="Destination file path, e.g. '/Documents/notes.md'.")
-        ],
+        path: Annotated[str, Field(description="Destination file path, e.g. '/Documents/notes.md'.")],
         content: Annotated[str, Field(description="File contents, as text or base64.")],
         encoding: Annotated[
             Literal["utf-8", "base64"],
             Field(description="How to interpret 'content'."),
         ] = "utf-8",
-        overwrite: Annotated[
-            bool, Field(description="Replace the file if it already exists.")
-        ] = False,
+        overwrite: Annotated[bool, Field(description="Replace the file if it already exists.")] = False,
     ) -> dict[str, Any]:
         if encoding == "base64":
             try:
@@ -257,12 +249,8 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
     )
     async def icloud_create_directory(
         path: Annotated[str, Field(description="Folder to create, e.g. '/Documents/2026/Q1'.")],
-        parents: Annotated[
-            bool, Field(description="Also create missing parent folders.")
-        ] = True,
-        exist_ok: Annotated[
-            bool, Field(description="Succeed quietly if the folder already exists.")
-        ] = True,
+        parents: Annotated[bool, Field(description="Also create missing parent folders.")] = True,
+        exist_ok: Annotated[bool, Field(description="Succeed quietly if the folder already exists.")] = True,
     ) -> dict[str, Any]:
         return await _run(client.create_directory, path, exist_ok, parents)
 
@@ -277,9 +265,7 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
     )
     async def icloud_move(
         source: Annotated[str, Field(description="Existing path to move.")],
-        destination: Annotated[
-            str, Field(description="Full new path, including the new name.")
-        ],
+        destination: Annotated[str, Field(description="Full new path, including the new name.")],
         overwrite: Annotated[
             bool,
             Field(description="If something is already at the destination, trash it first."),

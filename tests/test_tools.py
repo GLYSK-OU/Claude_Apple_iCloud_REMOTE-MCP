@@ -76,9 +76,7 @@ async def test_read_file_falls_back_to_base64_for_binary(server):
 
 async def test_read_file_can_be_forced_to_base64(server):
     payload = _payload(
-        await server.call_tool(
-            "icloud_read_file", {"path": "/Documents/notes.md", "force_base64": True}
-        )
+        await server.call_tool("icloud_read_file", {"path": "/Documents/notes.md", "force_base64": True})
     )
     assert payload["encoding"] == "base64"
     assert base64.b64decode(payload["content"]) == b"# Notes\nhello"
@@ -101,9 +99,7 @@ async def test_write_file_round_trips_base64(server):
 
 
 async def test_ascii_content_comes_back_as_text_not_base64(server):
-    await server.call_tool(
-        "icloud_write_file", {"path": "/Documents/plain.txt", "content": "hello"}
-    )
+    await server.call_tool("icloud_write_file", {"path": "/Documents/plain.txt", "content": "hello"})
     payload = _payload(await server.call_tool("icloud_read_file", {"path": "/Documents/plain.txt"}))
     assert payload["encoding"] == "utf-8"
     assert payload["content"] == "hello"

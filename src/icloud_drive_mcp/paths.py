@@ -71,8 +71,7 @@ def _split(raw: str) -> list[str]:
         if segment == "..":
             if not parts:
                 raise InvalidPathError(
-                    f"Path {raw!r} climbs above the iCloud Drive root. Use a path like "
-                    "'/Documents/notes.md'."
+                    f"Path {raw!r} climbs above the iCloud Drive root. Use a path like '/Documents/notes.md'."
                 )
             parts.pop()
             continue

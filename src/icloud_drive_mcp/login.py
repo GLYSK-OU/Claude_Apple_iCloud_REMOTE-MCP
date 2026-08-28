@@ -94,13 +94,9 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
 
     try:
         if not api.request_2fa_code():
-            raise LoginError(
-                "Apple would not send a code for this account; it is asking for a security key."
-            )
+            raise LoginError("Apple would not send a code for this account; it is asking for a security key.")
     except PyiCloudNoTrustedNumberAvailable as exc:
-        raise LoginError(
-            "Apple wants to send a code but this account has no trusted phone number."
-        ) from exc
+        raise LoginError("Apple wants to send a code but this account has no trusted phone number.") from exc
     except PyiCloudTrustedDevicePromptException as exc:
         raise LoginError(f"Apple would not send the two-factor prompt: {exc}") from exc
     except PyiCloudAPIResponseException as exc:
