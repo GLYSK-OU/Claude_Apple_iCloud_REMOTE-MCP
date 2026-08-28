@@ -182,7 +182,25 @@ jobs:
           bash -n scripts/build-mcpb.sh
 
       - name: Compose file is valid
-        run: docker compose -f deploy/infomaniak/docker-compose.yml config >/dev/null
+        run: |
+          # The env file is written by the deploy script at run time. Production
+          # should keep failing loudly when it is absent, so rather than marking
+          # it optional, CI supplies an empty one just to check the syntax.
+          sudo mkdir -p /etc/icloud-mcp
+          sudo touch /etc/icloud-mcp/icloud-mcp.env
+          docker compose -f deploy/infomaniak/docker-compose.yml config >/dev/null
+
+      - name: Compose keeps the hardening the image relies on
+        run: |
+          rendered=$(docker compose -f deploy/infomaniak/docker-compose.yml config)
+          # Compose normalises values, so match the rendered form, not the source.
+          for required in 'user: 10001:10001' 'read_only: true' 'no-new-privileges:true'; do
+            echo "$rendered" | grep -q "$required" || {
+              echo "compose lost: $required"; exit 1; }
+          done
+          # A named volume, never a host path: a missing bind-mount source is
+          # silently created as a directory and the container dies reading it.
+          echo "$rendered" | grep -q 'icloud-mcp-data' || { echo "state volume missing"; exit 1; }
 
       - name: The Caddy vhost proxies the whole host, not just /mcp
         # Scoping to /mcp 404s the OAuth handshake, which needs /.well-known,
