@@ -149,3 +149,28 @@ def test_waiting_returns_the_result_once_it_lands(signin):
     signin.start()
     signin._result = {"apple_id": "a@b.c", "root_entry_count": 3}
     assert signin.wait_for_result(timeout=2)["apple_id"] == "a@b.c"
+
+
+def test_sign_in_does_not_disturb_the_running_server(signin, config):
+    """Signing in must not take the MCP server down with it.
+
+    The sign-in page runs a web server inside the same process as the MCP
+    server. If starting or stopping it killed that process, every tool would
+    vanish moments after a successful sign-in — which is exactly what a user
+    reported seeing, and what this pins against.
+    """
+    import asyncio
+
+    from icloud_drive_mcp.server import build_server
+
+    mcp, _client, _provider = build_server(config, with_auth=False)
+    before = {t.name for t in asyncio.run(mcp.list_tools())}
+
+    signin.start()
+    signin.stop()
+    signin.start()
+
+    after = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert after == before
+    # And the status tool still answers rather than raising.
+    assert asyncio.run(mcp.call_tool("icloud_session_status", {})) is not None
