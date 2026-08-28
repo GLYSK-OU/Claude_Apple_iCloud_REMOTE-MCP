@@ -7,7 +7,7 @@ It ships two ways, and which you want depends on where you use Claude:
 
 | | **Desktop extension** | **Plugin** | **Connector** |
 |---|---|---|---|
-| For | Claude Desktop | Claude Code | Claude on the web |
+| For | Claude Desktop | Claude Code | Web, **iPhone, iPad**, Android |
 | Install | Double-click a `.mcpb` | `/plugin install icloud-drive@glysk` | Paste a URL into Settings → Connectors |
 | Runs | On your Mac or PC | On your own machine | On a server you host |
 | Needs hosting | No | No | Yes, a public HTTPS URL |
@@ -17,10 +17,21 @@ All three expose the same ten tools from the same code. Only the connector
 needs a server, and only because Claude on the web cannot run anything locally.
 
 ```
-Claude Desktop  ──stdio──►  local server        ──►  Apple iCloud
-Claude Code     ──stdio──►  local server        ──►  Apple iCloud
-Claude web      ──OAuth──►  server you host     ──►  Apple iCloud
+Claude Desktop  ──stdio──►  local server     ──►  Apple iCloud
+Claude Code     ──stdio──►  local server     ──►  Apple iCloud
+Claude web      ──┐
+Claude iPhone   ──┼─OAuth─►  server you host  ──►  Apple iCloud
+Claude iPad     ──┘
 ```
+
+**On iPhone and iPad, the hosted connector is the only option.** Nothing in
+this project runs on iOS — there is no Claude Desktop for iPhone, no Claude
+Code, and no way to install a `.mcpb`. Nor could there be: Anthropic's servers
+make the tool call to your connector, from `160.79.104.0/21`, so it has to be
+reachable from the internet. A phone behind carrier NAT never can be.
+
+Connectors are an account setting rather than a device one, so adding it once
+on claude.ai makes it appear on your phone and tablet by itself.
 
 > **On wanting "one of the published connectors".** The entries already inside
 > Claude — Google Drive among them — are first-party Anthropic integrations,
@@ -251,7 +262,8 @@ curl "https://your-server/status?token=YOUR_ADMIN_TOKEN"
 
 ### 3. Connect Claude
 
-**Claude on the web** — Settings → Connectors → Add custom connector, URL:
+**Claude on the web, iPhone, iPad, and Android** — on claude.ai, go to
+Customize → Connectors → Add custom connector, and give it the URL:
 
 ```
 https://your-server/mcp
@@ -259,6 +271,8 @@ https://your-server/mcp
 
 Claude registers itself, sends you to the consent screen, and you type your
 `MCP_GATE_PASSWORD`. That is the whole flow; no client ID or secret to paste.
+Add it once and it follows your account to every device — the mobile apps
+included, with nothing to install on them.
 
 **Claude Code**, against the same remote server:
 
