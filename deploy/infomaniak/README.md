@@ -69,11 +69,28 @@ Connectors are an account setting, so it appears on iPhone and iPad on its own.
 | Redeploy | `/opt/icloud-mcp-src/deploy/infomaniak/deploy-icloud-mcp.sh` |
 | Session health | `curl -s https://icloud.lopes.me/status -H "Authorization: Bearer $ADMIN_TOKEN"` |
 | Config | `/etc/icloud-mcp/icloud-mcp.env` (0600) |
+| Change the folder Claude sees | edit `ICLOUD_ROOT_PATH` in that file, then recreate |
 | Verbose logs | add `ICLOUD_MCP_LOG_LEVEL=DEBUG` to that file, then restart |
 | State | Docker volume `icloud-mcp-data` |
 | Caddy vhost | `/etc/caddy/conf.d/icloud.caddy` |
 
 Always `caddy validate --config /etc/caddy/Caddyfile` before reloading.
+
+### Changing which folder Claude can reach
+
+`ICLOUD_ROOT_PATH` is asked for once, on the first deploy, and later runs keep
+the existing environment file. To change it afterwards, edit the file and
+recreate the container:
+
+```bash
+sudo sed -i 's|^ICLOUD_ROOT_PATH=.*|ICLOUD_ROOT_PATH=/|' /etc/icloud-mcp/icloud-mcp.env
+sudo docker compose -f /opt/icloud-mcp/docker-compose.yml up -d --force-recreate
+```
+
+`/` gives access to the whole iCloud Drive. Any other value is a jail: paths are
+resolved beneath it and nothing above it is reachable, which is the safer
+default and why the prompt suggests `/Claude`. `icloud_session_status` reports
+the value in effect as `root_path`.
 
 ### When the code arrives but is rejected
 

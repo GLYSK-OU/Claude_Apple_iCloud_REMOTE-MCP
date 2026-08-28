@@ -57,8 +57,21 @@ else
 
     read -rp "    Apple ID email: " apple_id
     [ -n "$apple_id" ] || die "an Apple ID is required"
-    read -rp "    Confine Claude to which Drive folder? [/Claude]: " root_path
-    root_path="${root_path:-/Claude}"
+    # A bare word here is almost always a mis-answer — someone typing "y" at a
+    # prompt they read as a yes/no question — and it silently confines Claude to
+    # a folder of that name which does not exist, so every later operation fails
+    # for a reason that looks nothing like this prompt. Insist on a real path.
+    while :; do
+        printf "    Which Drive folder should Claude be confined to?\n"
+        printf "    Enter / for the whole iCloud Drive, or a path such as /Claude.\n"
+        read -rp "    Folder [/Claude]: " root_path
+        root_path="${root_path:-/Claude}"
+        case "$root_path" in
+            /) note "Claude will have access to the whole iCloud Drive"; break ;;
+            /?*) note "Claude will be confined to ${root_path}"; break ;;
+            *) printf "    A folder must start with '/'. Enter / for the whole Drive.\n\n" ;;
+        esac
+    done
 
     # Written in a subshell so the restrictive umask cannot leak into the
     # files created later — the vhost in particular, which Caddy reads as an
