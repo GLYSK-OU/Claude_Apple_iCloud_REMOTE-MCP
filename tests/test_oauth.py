@@ -204,3 +204,37 @@ def test_access_token_model_shape():
     # Guards against an SDK field rename silently breaking token loading.
     token = AccessToken(token="t", client_id="c", scopes=["icloud.drive"], expires_at=int(time.time()))
     assert token.token == "t"
+
+
+def test_the_consent_form_can_be_filled_by_a_password_manager():
+    """A password form with nothing to key an entry to gets no autofill.
+
+    iOS Keychain and most managers need a username field to associate a saved
+    password with, and it must be readable rather than display:none.
+    """
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "http_app.py"
+    ).read_text()
+    import re
+
+    form = source[source.index('<form method="post" action="/consent">') :]
+    form = form[: form.index("</form>")]
+    form = re.sub(r"<!--.*?-->", "", form, flags=re.S)  # prose about the markup is not markup
+
+    assert 'autocomplete="username"' in form, "no username field means no autofill"
+    assert 'autocomplete="current-password"' in form
+    assert "display:none" not in form.replace(" ", ""), "a hidden field is skipped by managers"
+
+
+def test_the_consent_page_says_where_the_password_comes_from():
+    """It is a deployment secret, not an Apple one, and the link is short-lived."""
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "http_app.py"
+    ).read_text()
+
+    assert "not your Apple ID password" in source
+    assert "15 minutes" in source, "say how long there is to go and find it"

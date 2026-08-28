@@ -185,6 +185,7 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLi
             error = "That password did not match. Try again."
 
         safe_id = html.escape(request_id)
+        safe_host = html.escape(request.url.hostname or "this server")
         return _page(
             "Connect to iCloud Drive",
             f"""
@@ -194,14 +195,24 @@ def _register_consent(mcp, provider: OwnerPasswordOAuthProvider, limiter: RateLi
             {_alert(error) if error else ""}
             <form method="post" action="/consent">
               <input type="hidden" name="request_id" value="{safe_id}">
+              <label for="server">Server</label>
+              <!-- A password manager will not offer a saved password for a form with
+                   nothing to key it to, so name the server in a real username field.
+                   It has to be readable rather than display:none for that to work,
+                   and it usefully says which server is being authorised. -->
+              <input id="server" name="server" type="text" value="{safe_host}"
+                     autocomplete="username" readonly tabindex="-1">
               <label for="password">Connection password</label>
               <input id="password" name="password" type="password" autocomplete="current-password"
                      autofocus required>
               <button type="submit">Allow access</button>
               <button type="submit" name="action" value="deny" class="secondary">Cancel</button>
             </form>
-            <p class="note">This is the <code>MCP_GATE_PASSWORD</code> set by whoever deployed this
-               server. It is not your Apple ID password.</p>
+            <p class="note">This is the <code>MCP_GATE_PASSWORD</code> chosen when this server was
+               deployed &mdash; not your Apple ID password, and not something Apple issued. Whoever
+               deployed it has it; on a self-hosted server it is in the deployment&rsquo;s
+               environment file. This link is valid for 15 minutes, so fetch it first if you do not
+               have it to hand; if it lapses, start the connection again from Claude.</p>
             """,
             status=401 if error else 200,
         )
