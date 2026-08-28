@@ -128,3 +128,68 @@ jobs:
 
       - name: The CLI reports status without a session
         run: docker run --rm -e ICLOUD_APPLE_ID=ci@example.com icloud-drive-mcp:ci status || true
+
+      - name: It runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id icloud-drive-mcp:ci -u)
+          echo "container uid: $uid"
+          test "$uid" = "10001" || { echo "expected uid 10001, got $uid"; exit 1; }
+
+      - name: It serves under the production hardening
+        # The VPS compose runs this read-only, non-root, with no new
+        # privileges and a tmpfs. Prove that combination actually boots here
+        # rather than on the server.
+        run: |
+          docker run -d --name hardened \
+            --read-only --user 10001:10001 --security-opt no-new-privileges:true \
+            --tmpfs /tmp:size=256m --tmpfs /home/icloud:size=16m \
+            -v icloud-ci-data:/data -p 127.0.0.1:8440:8000 \
+            -e ICLOUD_APPLE_ID=ci@example.com \
+            -e PUBLIC_URL=https://icloud.example.com \
+            -e MCP_GATE_PASSWORD=ci-gate -e ADMIN_TOKEN=ci-admin \
+            -e ICLOUD_SESSION_DIR=/data/icloud-session \
+            -e OAUTH_STORE_PATH=/data/oauth-store.json \
+            icloud-drive-mcp:ci http
+          for i in $(seq 30); do
+            curl -fsS --max-time 2 http://127.0.0.1:8440/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "--- health ---"
+          curl -fsS http://127.0.0.1:8440/health
+          echo
+          echo "--- OAuth discovery, which Claude needs before anything else ---"
+          curl -fsS http://127.0.0.1:8440/.well-known/oauth-authorization-server | head -c 200
+          echo
+          echo "--- /mcp must refuse an anonymous caller ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8440/mcp \
+                   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+                   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          test "$code" = "401" || { echo "expected 401, got $code"; docker logs hardened; exit 1; }
+          echo "401 as expected"
+          docker rm -f hardened >/dev/null
+
+  deploy-config:
+    name: Deploy config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Shell scripts parse
+        run: |
+          bash -n deploy/infomaniak/deploy-icloud-mcp.sh
+          bash -n deploy/infomaniak/check-ipv6.sh
+          bash -n plugin/scripts/run-server.sh
+          bash -n scripts/build-mcpb.sh
+
+      - name: Compose file is valid
+        run: docker compose -f deploy/infomaniak/docker-compose.yml config >/dev/null
+
+      - name: The Caddy vhost proxies the whole host, not just /mcp
+        # Scoping to /mcp 404s the OAuth handshake, which needs /.well-known,
+        # /authorize, /token, /register and /revoke as well.
+        run: |
+          grep -q 'reverse_proxy 127.0.0.1:8440' deploy/infomaniak/icloud.caddy
+          if grep -qE '^\s*(handle|route|reverse_proxy)\s+/mcp' deploy/infomaniak/icloud.caddy; then
+            echo "The vhost scopes routing to /mcp; the OAuth handshake would 404."
+            exit 1
+          fi

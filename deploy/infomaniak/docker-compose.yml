@@ -1,0 +1,48 @@
+# Deployed to /opt/icloud-mcp/docker-compose.yml by deploy-icloud-mcp.sh.
+services:
+  icloud-mcp:
+    image: icloud-drive-mcp:latest
+    container_name: icloud-mcp
+    restart: unless-stopped
+
+    # Loopback only. Caddy is the sole public entry point, matching the other
+    # services on this VPS.
+    ports:
+      - "127.0.0.1:8440:8000"
+
+    # Values are generated as hex, so Docker Compose's habit of eating
+    # everything after a `$` in an env_file cannot corrupt them.
+    env_file: /etc/icloud-mcp/icloud-mcp.env
+
+    # Must match the uid baked into the image, or the container cannot read
+    # its own session directory and exits at start-up.
+    user: "10001:10001"
+
+    volumes:
+      # A named volume, not a bind mount: a missing bind-mount source is
+      # silently created as a directory, and the container then dies reading
+      # it. Losing this volume only means signing in to Apple again.
+      - icloud-mcp-data:/data
+
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+      - /home/icloud:size=16m
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  icloud-mcp-data:
