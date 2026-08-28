@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import getpass
 import logging
+import secrets
 import sys
 import threading
 import time
@@ -144,6 +145,75 @@ def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
         "root_entry_count": len(entries),
         "root_entries_preview": entries[:10],
     }
+
+
+def code_from_form(form: Any) -> str:
+    """Read the verification code out of a submitted sign-in form.
+
+    The six boxes are joined by a little script before submit. If that script
+    never ran — CSP, a blocked extension, scripting off — the boxes still post
+    as d0..d5, and assembling them here means the page keeps working instead of
+    silently sending an empty code and blaming Apple.
+    """
+    joined = str(form.get("code") or "").strip()
+    if joined:
+        return joined
+    digits = [str(form.get(f"d{i}") or "").strip() for i in range(6)]
+    return "".join(digits)
+
+
+class HostedSignIn:
+    """One-link sign-in for a hosted deployment.
+
+    Without this, reconnecting Apple on a server means finding the admin token,
+    pasting it into a URL, and passing through a second gate before reaching the
+    page that actually matters. The caller of `icloud_sign_in` has already
+    proved they are the owner — they completed the connector's OAuth flow — so
+    they get a single-use link straight to the sign-in page instead.
+
+    The ticket is the whole credential, so it is long, short-lived, and burned
+    on first use.
+    """
+
+    TICKET_TTL_SECONDS = 900
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tickets: dict[str, float] = {}
+        self._result: dict[str, Any] | None = None
+
+    def mint(self) -> str:
+        ticket = secrets.token_urlsafe(32)
+        with self._lock:
+            now = time.time()
+            self._tickets = {t: e for t, e in self._tickets.items() if e > now}
+            self._tickets[ticket] = now + self.TICKET_TTL_SECONDS
+            self._result = None
+        return ticket
+
+    def redeem(self, ticket: str) -> bool:
+        """Spend a ticket. False if unknown, expired, or already used."""
+        with self._lock:
+            expiry = self._tickets.pop(ticket, None)
+        return expiry is not None and expiry > time.time()
+
+    def record(self, result: dict[str, Any]) -> None:
+        with self._lock:
+            self._result = result
+
+    def result(self) -> dict[str, Any] | None:
+        with self._lock:
+            return self._result
+
+    def wait_for_result(self, timeout: float) -> dict[str, Any] | None:
+        """Hold the tool call open until the human finishes in their browser."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            found = self.result()
+            if found is not None:
+                return found
+            time.sleep(1.0)
+        return None
 
 
 class PendingLoginRegistry:

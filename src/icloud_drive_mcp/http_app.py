@@ -21,7 +21,14 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from .config import Config
 from .drive import DriveClient
-from .login import LoginError, PendingLoginRegistry, finish_login, start_login
+from .login import (
+    HostedSignIn,
+    LoginError,
+    PendingLoginRegistry,
+    code_from_form,
+    finish_login,
+    start_login,
+)
 from .oauth import OwnerPasswordOAuthProvider
 from .security import (
     ADMIN_COOKIE,
@@ -34,6 +41,7 @@ from .security import (
 from .server import build_server
 from .webui import alert as _alert
 from .webui import page as _page
+from .webui import signin_code_page, signin_done_page, signin_password_page
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +49,8 @@ LOGGER = logging.getLogger(__name__)
 def create_app(config: Config):
     """Build the Starlette app that serves MCP, OAuth, and admin routes."""
     config.validate_for_http()
-    mcp, client, provider = build_server(config, with_auth=True)
+    hosted_signin = HostedSignIn()
+    mcp, client, provider = build_server(config, with_auth=True, hosted_signin=hosted_signin)
     assert isinstance(provider, OwnerPasswordOAuthProvider)
     pending_logins = PendingLoginRegistry()
 
@@ -53,7 +62,7 @@ def create_app(config: Config):
 
     _register_health(mcp, client, config, admin_limiter)
     _register_consent(mcp, provider, consent_limiter)
-    _register_admin(mcp, client, config, pending_logins, admin_limiter)
+    _register_admin(mcp, client, config, pending_logins, admin_limiter, hosted_signin)
 
     return mcp.streamable_http_app(streamable_http_path="/mcp", host=config.host)
 
@@ -208,7 +217,31 @@ def _register_admin(
     config: Config,
     pending: PendingLoginRegistry,
     limiter: RateLimiter,
+    hosted_signin: HostedSignIn,
 ) -> None:
+    @mcp.custom_route("/signin/{ticket}", methods=["GET"])
+    async def signin_link(request: Request) -> Response:
+        """One-link sign-in, for the person Claude just handed a URL to.
+
+        They already proved they own this connector by completing its OAuth
+        flow, so a single-use ticket is enough. Making them find the admin
+        token and pass a second gate to reach the same page is the "auth from
+        too many channels" problem, not security.
+        """
+        if not hosted_signin.redeem(request.path_params["ticket"]):
+            return _page(
+                "Link expired",
+                "<h1>This sign-in link has expired</h1><p>Ask Claude to start the iCloud sign-in again.</p>",
+                status=410,
+            )
+        redirect = RedirectResponse("/admin/login", status_code=303)
+        set_admin_cookie(redirect, config.admin_token, secure=config.public_url.startswith("https://"))
+        for header, value in SECURITY_HEADERS.items():
+            redirect.headers[header] = value
+        return redirect
+
+    _ = signin_link
+
     @mcp.custom_route("/admin/login", methods=["GET", "POST"])
     async def admin_login(request: Request) -> Response:
         """Re-authenticate with Apple from a browser.
@@ -254,7 +287,6 @@ def _register_admin(
             for header, value in SECURITY_HEADERS.items():
                 redirect.headers[header] = value
             return redirect
-        apple_id_default = html.escape(config.apple_id)
         message = ""
         stage = "password"
 
@@ -282,11 +314,10 @@ def _register_admin(
                         stage = "password"
                         message = "That sign-in attempt timed out. Start again."
                     else:
-                        result = await anyio.to_thread.run_sync(
-                            finish_login, current, str(form.get("code") or "")
-                        )
+                        result = await anyio.to_thread.run_sync(finish_login, current, code_from_form(form))
                         pending.clear()
                         client.reset()
+                        hosted_signin.record(result)
                         return _admin_done(
                             f"Signed in as {result['apple_id']}. "
                             f"iCloud Drive root has {result['root_entry_count']} entries.",
@@ -295,52 +326,16 @@ def _register_admin(
                 message = str(exc)
                 stage = "code" if step == "code" and pending.take() else "password"
 
+        action = "/admin/login"
         if stage == "code":
-            body = f"""
-            <h1>Enter the verification code</h1>
-            <p>Apple sent a 6-digit code to your trusted devices.</p>
-            {_alert(message, "ok" if "sent" in message.lower() else "error") if message else ""}
-            <form method="post" action="/admin/login">
-              <input type="hidden" name="step" value="code">
-              <label for="code">Verification code</label>
-              <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
-                     autofocus required>
-              <button type="submit">Verify</button>
-            </form>
-            """
-            return _page("Verification code", body)
-
-        body = f"""
-        <h1>Sign in to iCloud</h1>
-        <p>This stores an Apple session on the server so Claude can reach iCloud Drive.
-           Apple expires it roughly every 30 days.</p>
-        {_alert(message) if message else ""}
-        <form method="post" action="/admin/login">
-          <input type="hidden" name="step" value="password">
-          <label for="apple_id">Apple ID</label>
-          <input id="apple_id" name="apple_id" type="email" value="{apple_id_default}"
-                 autocomplete="username" required>
-          <label for="password">Apple ID password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button type="submit">Continue</button>
-        </form>
-        <p class="note">Use the account's real password. An app-specific password will not work —
-           Apple only accepts those for Mail, Contacts, Calendar and Reminders, never for
-           iCloud Drive. The password is used once to mint a session and is not stored.</p>
-        """
-        return _page("Sign in to iCloud", body)
+            return signin_code_page(action, message)
+        return signin_password_page(config.apple_id, action, message, local=False)
 
     _ = admin_login
 
 
 def _admin_done(message: str) -> HTMLResponse:
-    return _page(
-        "Signed in",
-        f"""
-        <h1>iCloud is connected</h1>
-        {_alert(message, "ok")}
-        <p>Claude can now read and write this iCloud Drive. Come back to
-           <code>/admin/login</code> when the session expires.</p>
-        <p class="note"><a href="/status">View session status</a></p>
-        """,
+    return signin_done_page(
+        message,
+        '<p class="note"><a href="/status">View session status</a></p>',
     )

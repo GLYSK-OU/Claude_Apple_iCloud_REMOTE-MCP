@@ -208,3 +208,151 @@ def test_sign_in_does_not_disturb_the_running_server(signin, config):
     assert after == before
     # And the status tool still answers rather than raising.
     assert asyncio.run(mcp.call_tool("icloud_session_status", {})) is not None
+
+
+# ----------------------------------------------------- the hosted one-link flow
+
+
+def test_hosted_ticket_is_single_use_and_expires():
+    from icloud_drive_mcp.login import HostedSignIn
+
+    hosted = HostedSignIn()
+    ticket = hosted.mint()
+    assert hosted.redeem(ticket) is True
+    # A link that works twice is a link that leaks.
+    assert hosted.redeem(ticket) is False
+    assert hosted.redeem("never-issued") is False
+
+
+def test_hosted_ticket_expiry_is_enforced(monkeypatch):
+    from icloud_drive_mcp import login
+
+    hosted = login.HostedSignIn()
+    monkeypatch.setattr(login.HostedSignIn, "TICKET_TTL_SECONDS", -1)
+    assert hosted.redeem(hosted.mint()) is False
+
+
+def test_hosted_sign_in_returns_a_public_link_not_a_loopback_one(config):
+    """On a server, a localhost URL points at the server. Nobody can open it."""
+    import asyncio
+    import json
+    from dataclasses import replace
+
+    from icloud_drive_mcp.login import HostedSignIn
+    from icloud_drive_mcp.server import build_server
+
+    hosted = HostedSignIn()
+    hosted_config = replace(config, public_url="https://icloud.example.com")
+    mcp, _client, _provider = build_server(hosted_config, with_auth=False, hosted_signin=hosted)
+    result = asyncio.run(mcp.call_tool("icloud_sign_in", {"wait_seconds": 0}))
+    payload = json.loads(result.content[0].text)
+
+    assert payload["sign_in_url"].startswith("https://icloud.example.com/signin/")
+    assert "localhost" not in payload["sign_in_url"]
+    assert "127.0.0.1" not in payload["sign_in_url"]
+
+
+def test_hosted_link_carries_no_admin_token(config):
+    """The whole point is one link, not a token the user has to go and find."""
+    import asyncio
+    import json
+    from dataclasses import replace
+
+    from icloud_drive_mcp.login import HostedSignIn
+    from icloud_drive_mcp.server import build_server
+
+    hosted = HostedSignIn()
+    secretive = replace(config, public_url="https://icloud.example.com", admin_token="super-secret-admin")
+    mcp, _client, _provider = build_server(secretive, with_auth=False, hosted_signin=hosted)
+    payload = json.loads(asyncio.run(mcp.call_tool("icloud_sign_in", {"wait_seconds": 0})).content[0].text)
+    assert "super-secret-admin" not in json.dumps(payload)
+
+
+def test_hosted_wait_returns_the_recorded_outcome():
+    from icloud_drive_mcp.login import HostedSignIn
+
+    hosted = HostedSignIn()
+    assert hosted.wait_for_result(timeout=0.2) is None
+    hosted.record({"apple_id": "a@b.c", "root_entry_count": 7})
+    assert hosted.wait_for_result(timeout=2)["root_entry_count"] == 7
+
+
+# ------------------------------------------- one page, both deployments
+
+
+def test_both_flows_render_the_same_warnings():
+    """The hosted sign-in used to be a plainer page with none of this."""
+    from icloud_drive_mcp.webui import signin_password_page
+
+    for local in (True, False):
+        body = signin_password_page("a@b.c", "/x", local=local).body.decode()
+        squashed = " ".join(body.split())
+        assert "What signing in actually grants" in squashed
+        assert "Photos, Contacts, Calendar, Reminders, Notes and Find My" in squashed
+        assert "app-specific password will not work" in squashed
+        assert "GLYSK" in squashed
+
+
+def test_the_code_page_is_six_boxes_everywhere():
+    import re
+
+    from icloud_drive_mcp.webui import signin_code_page
+
+    body = signin_code_page("/x").body.decode()
+    assert len(re.findall(r'name="d[0-9]"', body)) == 6
+    # The boxes are useless unless the script that joins them is allowed to run.
+    assert "script-src 'unsafe-inline'" in signin_code_page("/x").headers["content-security-policy"]
+
+
+def test_the_page_says_where_it_is_running():
+    from icloud_drive_mcp.webui import signin_password_page
+
+    assert "your own computer" in signin_password_page("a@b.c", "/x", local=True).body.decode()
+    assert "your own server" in signin_password_page("a@b.c", "/x", local=False).body.decode()
+
+
+# ------------------------------------------------- entering the six-digit code
+
+
+def test_code_boxes_have_no_maxlength():
+    """maxlength truncates an autofilled code to one character.
+
+    iOS offers the SMS code above the keyboard and fills the whole thing into
+    the focused field. With maxlength="1" the browser cuts it to a single digit
+    before any script can see it, so the user types six digits and one arrives.
+    The script keeps one digit per box instead.
+    """
+    from icloud_drive_mcp.webui import signin_code_page
+
+    assert 'maxlength="' not in signin_code_page("/x").body.decode()
+
+
+def test_code_script_spreads_a_multi_digit_value():
+    from icloud_drive_mcp.webui import signin_code_page
+
+    body = signin_code_page("/x").body.decode()
+    assert "function spread(" in body
+    assert "digits.length > 1" in body
+    # autofocus alone can land after the first keystroke, dropping a digit.
+    assert "boxes[0].focus()" in body
+
+
+def test_the_server_assembles_the_code_when_the_script_did_not_run():
+    """A blocked script must not mean a silently empty code blamed on Apple."""
+    from icloud_drive_mcp.login import code_from_form
+
+    assert code_from_form({"d0": "4", "d1": "2", "d2": "8", "d3": "9", "d4": "1", "d5": "3"}) == "428913"
+    # The joined field still wins when the script did run.
+    assert code_from_form({"code": "111111", "d0": "4"}) == "111111"
+    assert code_from_form({}) == ""
+
+
+def test_code_is_read_the_same_way_by_both_flows():
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp"
+    for name in ("local_signin.py", "http_app.py"):
+        source = (root / name).read_text()
+        assert "code_from_form(form)" in source, name
+        # The old direct read would skip the fallback entirely.
+        assert 'form.get("code")' not in source, name

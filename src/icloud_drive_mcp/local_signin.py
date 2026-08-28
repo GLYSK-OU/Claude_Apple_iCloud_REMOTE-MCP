@@ -28,43 +28,12 @@ from starlette.routing import Route
 
 from .config import Config
 from .drive import DriveClient
-from .login import LoginError, PendingLogin, finish_login, start_login
+from .login import LoginError, PendingLogin, code_from_form, finish_login, start_login
 from .security import SECURITY_HEADERS, constant_time_equals
-from .webui import alert, page, permissions_panel
+from .webui import page, signin_code_page, signin_done_page, signin_password_page
 
 LOGGER = logging.getLogger(__name__)
 
-_CODE_SCRIPT = """<script>
-(function () {
-  var form = document.getElementById('f');
-  if (!form) return;
-  var boxes = Array.prototype.slice.call(form.querySelectorAll('.codes input'));
-  boxes.forEach(function (box, i) {
-    box.addEventListener('input', function () {
-      box.value = box.value.replace(/[^0-9]/g, '').slice(-1);
-      if (box.value && i < boxes.length - 1) boxes[i + 1].focus();
-    });
-    box.addEventListener('keydown', function (e) {
-      if (e.key === 'Backspace' && !box.value && i > 0) boxes[i - 1].focus();
-    });
-    box.addEventListener('paste', function (e) {
-      var text = (e.clipboardData || window.clipboardData).getData('text') || '';
-      var digits = text.replace(/[^0-9]/g, '').slice(0, boxes.length);
-      if (!digits) return;
-      e.preventDefault();
-      for (var j = 0; j < digits.length; j++) boxes[j].value = digits[j];
-      boxes[Math.min(digits.length, boxes.length - 1)].focus();
-    });
-  });
-  form.addEventListener('submit', function () {
-    var joined = document.createElement('input');
-    joined.type = 'hidden';
-    joined.name = 'code';
-    joined.value = boxes.map(function (b) { return b.value; }).join('');
-    form.appendChild(joined);
-  });
-})();
-</script>"""
 
 # Long enough to find a phone and read a code off it; short enough that a
 # forgotten tab does not leave a sign-in page listening all day.
@@ -211,7 +180,7 @@ class LocalSignInServer:
                         stage = "password"
                         message = "That attempt timed out. Start again."
                     else:
-                        result = finish_login(self._pending, str(form.get("code") or ""))
+                        result = finish_login(self._pending, code_from_form(form))
                         self._pending = None
                         self._client.reset()
                         self._result = result
@@ -233,77 +202,11 @@ class LocalSignInServer:
 
     def _form_page(self, stage: str, message: str) -> Response:
         if stage == "code":
-            kind = "ok" if "sent" in message.lower() else "error"
-            boxes = "".join(
-                f'<input name="d{i}" inputmode="numeric" pattern="[0-9]*" maxlength="1" '
-                f'autocomplete="{"one-time-code" if i == 0 else "off"}" '
-                f'aria-label="Digit {i + 1}"{" autofocus" if i == 0 else ""}>'
-                for i in range(6)
-            )
-            return page(
-                "Verification code",
-                f"""
-                <h1>Enter the code Apple sent</h1>
-                {
-                    alert(message, kind)
-                    if message
-                    else '<p class="lead">Apple has sent a six-digit code to your trusted devices.</p>'
-                }
-                <form method="post" action="{self._action()}" id="f">
-                  <input type="hidden" name="step" value="code">
-                  <div class="codes">{boxes}</div>
-                  <button type="submit">Verify and connect</button>
-                </form>
-                <p class="note">Apple sent this code, not GLYSK. If you did not just start
-                   this sign-in, close this page and change your Apple ID password.</p>
-                """,
-                script=_CODE_SCRIPT,
-                local=True,
-            )
-
-        return page(
-            "Connect iCloud Drive",
-            f"""
-            <div class="host">&#x1F512; localhost &mdash; this page is running on your own computer</div>
-            <h1>Connect Claude to your iCloud Drive</h1>
-            <p class="lead">Sign in with Apple to let Claude work with your files. This page is
-               served by the software on this machine; nothing you type here travels over the
-               internet except to Apple.</p>
-            {alert(message) if message else ""}
-            {permissions_panel()}
-            <form method="post" action="{self._action()}">
-              <input type="hidden" name="step" value="password">
-              <label for="apple_id">Apple ID</label>
-              <input id="apple_id" name="apple_id" type="email"
-                     value="{html.escape(self._config.apple_id)}"
-                     autocomplete="username" required>
-              <label for="password">Apple ID password</label>
-              <input id="password" name="password" type="password"
-                     autocomplete="current-password" required>
-              <button type="submit">Continue to Apple</button>
-            </form>
-            <p class="note"><strong>Use your account's real password.</strong> An app-specific
-               password will not work: Apple accepts those only for Mail, Contacts, Calendar and
-               Reminders, never for iCloud Drive. GLYSK never receives it.</p>
-            """,
-            local=True,
-        )
+            return signin_code_page(self._action(), message)
+        return signin_password_page(self._config.apple_id, self._action(), message, local=True)
 
     def _done_page(self, message: str) -> Response:
-        return page(
-            "Connected",
-            f"""
-            <h1>iCloud Drive is connected</h1>
-            {alert(message, "ok")}
-            <p class="lead">You can close this tab. Claude will confirm in your conversation.</p>
-            <p class="note">Apple ends this session after about 30 days and offers no way to
-               extend it without a new code — that is Apple's policy, not a choice this software
-               makes. When it lapses, ask Claude to sign in to iCloud Drive again.</p>
-            <p class="note">To revoke access sooner, remove this device under Apple ID &rsaquo;
-               Devices, or delete the session folder on this computer.</p>
-            """,
-            local=True,
-        )
+        return signin_done_page(message)
 
     def result(self) -> dict[str, Any] | None:
         with self._lock:

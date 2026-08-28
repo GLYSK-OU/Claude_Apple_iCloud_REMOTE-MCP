@@ -203,4 +203,159 @@ def permissions_panel() -> str:
     """
 
 
-__all__ = ["page", "alert", "permissions_panel", "BRAND", "PRODUCT", "LOGO"]
+_CODE_SCRIPT = """<script>
+(function () {
+  var form = document.getElementById('f');
+  if (!form) return;
+  var boxes = Array.prototype.slice.call(form.querySelectorAll('.codes input'));
+  var last = boxes.length - 1;
+
+  // Spread a multi-character value across the boxes. iOS offers the SMS code
+  // above the keyboard and autofills the whole thing into one field, which
+  // maxlength would otherwise reduce to a single digit.
+  function spread(digits, from) {
+    for (var j = 0; j < boxes.length; j++) {
+      if (j >= from) boxes[j].value = digits.charAt(j - from) || '';
+    }
+    boxes[Math.min(from + digits.length, last)].focus();
+  }
+
+  boxes.forEach(function (box, i) {
+    box.addEventListener('input', function () {
+      var digits = box.value.replace(/[^0-9]/g, '');
+      if (digits.length > 1) { spread(digits, i); return; }
+      box.value = digits;
+      if (digits && i < last) boxes[i + 1].focus();
+    });
+    box.addEventListener('keydown', function (e) {
+      if (e.key === 'Backspace' && !box.value && i > 0) boxes[i - 1].focus();
+    });
+    box.addEventListener('focus', function () { box.select(); });
+    box.addEventListener('paste', function (e) {
+      var text = (e.clipboardData || window.clipboardData).getData('text') || '';
+      var digits = text.replace(/[^0-9]/g, '').slice(0, boxes.length);
+      if (!digits) return;
+      e.preventDefault();
+      spread(digits, i);
+    });
+  });
+
+  // The autofocus attribute can land after the first keystroke, which silently
+  // drops the leading digit. Take focus explicitly once the page is ready.
+  if (boxes[0]) { try { boxes[0].focus(); } catch (err) {} }
+
+  form.addEventListener('submit', function () {
+    var joined = document.createElement('input');
+    joined.type = 'hidden';
+    joined.name = 'code';
+    joined.value = boxes.map(function (b) { return b.value; }).join('');
+    form.appendChild(joined);
+  });
+})();
+</script>"""
+
+
+def signin_password_page(apple_id: str, action: str, message: str = "", local: bool = False) -> HTMLResponse:
+    """The first sign-in screen, shared by the local and hosted flows.
+
+    One page rather than two: this is where someone decides to hand over an
+    Apple password, and it should say the same things wherever it is served
+    from.
+    """
+    where = (
+        "localhost &mdash; this page is running on your own computer"
+        if local
+        else "your own server &mdash; this page is served by the connector you deployed"
+    )
+    return page(
+        "Connect iCloud Drive",
+        f"""
+        <div class="host">&#x1F512; {where}</div>
+        <h1>Connect Claude to your iCloud Drive</h1>
+        <p class="lead">Sign in with Apple so Claude can work with your files. Your password
+           goes straight to Apple from here — it is never stored, never sent to Claude, and
+           never appears in your conversation.</p>
+        {alert(message) if message else ""}
+        {permissions_panel()}
+        <form method="post" action="{action}">
+          <input type="hidden" name="step" value="password">
+          <label for="apple_id">Apple ID</label>
+          <input id="apple_id" name="apple_id" type="email" value="{html.escape(apple_id)}"
+                 autocomplete="username" required>
+          <label for="password">Apple ID password</label>
+          <input id="password" name="password" type="password"
+                 autocomplete="current-password" required>
+          <button type="submit">Continue to Apple</button>
+        </form>
+        <p class="note"><strong>Use your account's real password.</strong> An app-specific
+           password will not work: Apple accepts those only for Mail, Contacts, Calendar and
+           Reminders, never for iCloud Drive. GLYSK never receives it.</p>
+        """,
+        local=True,
+    )
+
+
+def signin_code_page(action: str, message: str = "") -> HTMLResponse:
+    """Apple-style six-box code entry, shared by both flows."""
+    boxes = "".join(
+        # No maxlength: it truncates an autofilled code to one character before
+        # any script can see it, and that is exactly how iOS delivers the SMS
+        # code. The script keeps one digit per box instead.
+        f'<input name="d{i}" inputmode="numeric" pattern="[0-9]*" '
+        f'autocomplete="{"one-time-code" if i == 0 else "off"}" '
+        f'aria-label="Digit {i + 1} of 6"{" autofocus" if i == 0 else ""}>'
+        for i in range(6)
+    )
+    kind = "ok" if "sent" in message.lower() else "error"
+    return page(
+        "Verification code",
+        f"""
+        <h1>Enter the code Apple sent</h1>
+        {
+            alert(message, kind)
+            if message
+            else '<p class="lead">Apple has sent a six-digit code to your trusted devices.</p>'
+        }
+        <form method="post" action="{action}" id="f">
+          <input type="hidden" name="step" value="code">
+          <div class="codes">{boxes}</div>
+          <button type="submit">Verify and connect</button>
+        </form>
+        <p class="note">Apple sent this code, not GLYSK. If you did not just start this
+           sign-in, close this page and change your Apple ID password.</p>
+        """,
+        script=_CODE_SCRIPT,
+        local=True,
+    )
+
+
+def signin_done_page(message: str, extra: str = "") -> HTMLResponse:
+    """The confirmation screen, shared by both flows."""
+    return page(
+        "Connected",
+        f"""
+        <h1>iCloud Drive is connected</h1>
+        {alert(message, "ok")}
+        <p class="lead">You can close this tab. Claude will confirm in your conversation.</p>
+        {extra}
+        <p class="note">Apple ends this session after about 30 days and offers no way to
+           extend it without a new code — Apple's policy, not this software's. When it
+           lapses, ask Claude to sign in to iCloud Drive again.</p>
+        <p class="note">To revoke access sooner, remove this device under Apple ID &rsaquo;
+           Devices, or delete the session directory on the server.</p>
+        """,
+        local=True,
+    )
+
+
+__all__ = [
+    "page",
+    "alert",
+    "permissions_panel",
+    "signin_password_page",
+    "signin_code_page",
+    "signin_done_page",
+    "BRAND",
+    "PRODUCT",
+    "LOGO",
+]

@@ -75,7 +75,9 @@ async def _run(func, *args, **kwargs):
         raise ToolError(str(translate_exception(exc))) from exc
 
 
-def build_server(config: Config, *, with_auth: bool = False) -> tuple[MCPServer, DriveClient, Any]:
+def build_server(
+    config: Config, *, with_auth: bool = False, hosted_signin: Any = None
+) -> tuple[MCPServer, DriveClient, Any]:
     """Construct the MCP server, its Drive client, and (for HTTP) the OAuth provider."""
     client = DriveClient(config)
     provider = None
@@ -109,11 +111,11 @@ def build_server(config: Config, *, with_auth: bool = False) -> tuple[MCPServer,
         auth=auth_settings,
     )
 
-    _register_tools(mcp, client, config)
+    _register_tools(mcp, client, config, hosted_signin)
     return mcp, client, provider
 
 
-def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None:
+def _register_tools(mcp: MCPServer, client: DriveClient, config: Config, hosted_signin: Any = None) -> None:
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
     additive = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
     destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
@@ -365,19 +367,29 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
             ),
         ] = 240,
     ) -> dict[str, Any]:
-        server = _signin_server(config, client)
-        url = await anyio.to_thread.run_sync(server.start)
+        # A hosted deployment hands out a single-use link straight to the
+        # sign-in page. Starting a loopback server there would return a
+        # localhost URL pointing at the server's own machine, which the user
+        # cannot open.
+        if hosted_signin is not None:
+            url = f"{config.public_url}/signin/{hosted_signin.mint()}"
+            waiter = hosted_signin
+        else:
+            server = _signin_server(config, client)
+            url = await anyio.to_thread.run_sync(server.start)
+            waiter = server
+
         opened = {
             "sign_in_url": url,
             "tell_the_user": (
-                f"Open {url} in a browser on this computer. It is a page served by this "
-                "software on your own machine — 'localhost' means your computer, so nothing "
-                "you type there crosses the internet except to Apple. Enter your Apple ID "
-                "password, then the six-digit code Apple sends to your devices."
+                f"Open {url} to connect Apple. The page explains exactly what access this "
+                "grants before asking for anything. Enter the Apple ID password, then the "
+                "six-digit code Apple sends. The password goes straight to Apple and never "
+                "reaches this conversation."
             ),
             "note": (
-                "An app-specific password will not work; Apple requires the account's real "
-                "password for iCloud Drive."
+                "The link works once and expires shortly. An app-specific password will not "
+                "work; Apple requires the account's real password for iCloud Drive."
             ),
         }
         if wait_seconds == 0:
@@ -385,9 +397,7 @@ def _register_tools(mcp: MCPServer, client: DriveClient, config: Config) -> None
             opened["next_step"] = "Call icloud_session_status once the user says they are done."
             return opened
 
-        # Show the link, then hold the call open so the conversation gets a real
-        # answer instead of going silent while the user is in their browser.
-        result = await anyio.to_thread.run_sync(server.wait_for_result, float(wait_seconds))
+        result = await anyio.to_thread.run_sync(waiter.wait_for_result, float(wait_seconds))
         if result is None:
             opened["status"] = "timed_out"
             opened["next_step"] = (
