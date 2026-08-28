@@ -385,6 +385,7 @@ class _FakeAPI2FA:
         self.requests = 0
         self.push_requests = 0
         self.options_reads = 0
+        self.pushed_urls = []
         self._auth_data = {"mode": "sms", "hasTrustedDevices": True}
 
     def _get_mfa_auth_options(self):
@@ -397,8 +398,35 @@ class _FakeAPI2FA:
         return self._on_request()
 
     def _request_2fa_code(self):
-        """The push+SMS route pyicloud itself uses during sign-in."""
+        """pyicloud's own helper, which fires the device push AND an SMS."""
         self.push_requests += 1
+
+    # --- what a single-route device push needs ---
+
+    _auth_endpoint = "https://idmsa.example/appleauth/auth"
+
+    def _get_auth_headers(self, overrides=None):
+        headers = {"scnt": "x"}
+        headers.update(overrides or {})
+        return headers
+
+    def _set_two_factor_delivery_state(self, method, notice=None):
+        self.two_factor_delivery_method = method
+
+    def _trusted_phone_number(self):
+        return object()
+
+    @property
+    def session(self):
+        api = self
+
+        class _Session:
+            def get(self, url, headers=None):
+                api.push_requests += 1
+                api.pushed_urls.append(url)
+                return None
+
+        return _Session()
 
 
 class _FakeAPINeverRequested(_FakeAPI2FA):
@@ -483,7 +511,7 @@ def test_the_request_falls_back_when_the_bridge_is_not_offered(config, monkeypat
 
     login.start_login(config, "a@b.c", "pw")
 
-    assert api.push_requests == 1, "the push+SMS route must be tried"
+    assert api.push_requests == 1, "the device push must be tried"
 
 
 def test_a_failure_to_request_still_reaches_the_code_page(config, monkeypatch):
@@ -548,14 +576,24 @@ def test_resend_falls_back_to_the_route_that_actually_delivers(config, monkeypat
 
     message = login.resend_code(pending)
 
-    assert api.push_requests == 1, "the push route must be tried when the bridge declines"
+    assert api.push_requests == 1, "the device push must be tried when the bridge declines"
+    assert api.pushed_urls == ["https://idmsa.example/appleauth/auth/verify/trusteddevice"]
+    assert api.two_factor_delivery_method == "trusted_device", (
+        "the route must be recorded so validation checks the matching endpoint"
+    )
     assert "throttle" not in message.lower(), "do not blame Apple for our own routing"
 
 
 class _FakeAPIBridgeOnly(_FakeAPI2FA):
-    """An older pyicloud, with no private push route to fall back to."""
+    """Bridge not offered, and the device push cannot be delivered either."""
 
-    _request_2fa_code = None
+    @property
+    def session(self):
+        class _Session:
+            def get(self, url, headers=None):
+                raise RuntimeError("no route to Apple")
+
+        return _Session()
 
 
 def test_resend_is_honest_when_no_route_is_available(config, monkeypatch):
@@ -867,3 +905,76 @@ def test_the_code_is_normalised_before_use():
 
     api = _FakeAPIVerify(rejects_code=False, trust_works=True)
     assert login.finish_login(_pending(api), " 123 456 ")["trusted_session"] is True
+
+
+# ------------------------- a code must be checked against the route it arrived on
+
+
+class _FakeAPIRouted(_FakeAPIVerify):
+    """Apple accepts the code only on the route that actually sent it.
+
+    pyicloud's `_srp_authentication` fires the device push *and* an SMS, so
+    two codes exist. `validate_2fa_code` checks whichever route
+    `two_factor_delivery_method` names — and the private request path never
+    sets it, so it stays "unknown" and only the device route is ever tried.
+    """
+
+    def __init__(self, *, code_route: str):
+        super().__init__(rejects_code=False, trust_works=True)
+        self._code_route = code_route
+        self.two_factor_delivery_method = "unknown"
+        self.attempted_routes = []
+
+    def validate_2fa_code(self, code):
+        import logging as _logging
+
+        route = "sms" if self.two_factor_delivery_method == "sms" else "trusted_device"
+        self.attempted_routes.append(route)
+        if route != self._code_route:
+            _logging.getLogger("pyicloud.base").error("Code verification failed.")
+            return False
+        _logging.getLogger("pyicloud.base").debug("Code verification successful.")
+        self.trust_session()
+        return not self.requires_2sa
+
+
+def test_an_sms_code_is_accepted_even_though_the_device_route_is_checked_first():
+    """The reported failure: the texted code, rejected as wrong digits."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIRouted(code_route="sms")
+    result = login.finish_login(_pending(api), "123456")
+
+    assert api.attempted_routes == ["trusted_device", "sms"]
+    assert result["trusted_session"] is True
+
+
+def test_a_device_code_still_works_without_a_second_attempt():
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIRouted(code_route="trusted_device")
+    result = login.finish_login(_pending(api), "123456")
+
+    assert api.attempted_routes == ["trusted_device"], "do not burn a second attempt"
+    assert result["trusted_session"] is True
+
+
+def test_a_genuinely_wrong_code_is_rejected_on_every_route():
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIRouted(code_route="neither")
+    with pytest.raises(login.LoginError, match="not accepted"):
+        login.finish_login(_pending(api), "123456")
+
+    assert api.attempted_routes == ["trusted_device", "sms"]
+
+
+def test_no_second_route_is_tried_when_apple_has_no_phone_number():
+    from icloud_drive_mcp import login
+
+    api = _FakeAPIRouted(code_route="neither")
+    api._trusted_phone_number = lambda: None
+    with pytest.raises(login.LoginError, match="not accepted"):
+        login.finish_login(_pending(api), "123456")
+
+    assert api.attempted_routes == ["trusted_device"], "no number means no SMS code exists"

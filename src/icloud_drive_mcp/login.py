@@ -309,36 +309,61 @@ def start_login(config: Config, apple_id: str, password: str) -> PendingLogin | 
     return pending
 
 
+def _set_delivery_route(api: PyiCloudService, route: str) -> None:
+    """Record which route a code was sent on, so validation matches it.
+
+    `validate_2fa_code` branches on this: "sms" posts the code to
+    `/verify/phone`, anything else to `/verify/trusteddevice/securitycode`.
+    Apple rejects a code checked against a route it was not sent on, and that
+    reads to the user as a wrong code.
+    """
+    setter = getattr(api, "_set_two_factor_delivery_state", None)
+    if callable(setter):
+        setter(route)
+    else:  # pragma: no cover - older pyicloud
+        api._two_factor_delivery_method = route
+
+
+def _request_device_code(api: PyiCloudService) -> None:
+    """Ask Apple to push a code to the trusted devices. No SMS.
+
+    `pyicloud`'s own `_request_2fa_code()` fires *both* routes every time: a
+    GET to `/verify/trusteddevice`, then a PUT to `/verify/phone` whenever a
+    trusted number exists. Two codes arrive for one sign-in, the user cannot
+    tell which to type, and validation only ever checks one of them.
+
+    So request the one route on its own, and record which it was.
+    """
+    headers = api._get_auth_headers({"Accept": "application/json"})
+    api.session.get(f"{api._auth_endpoint}/verify/trusteddevice", headers=headers)
+    _set_delivery_route(api, "trusted_device")
+
+
 def _ask_apple_again(api: PyiCloudService) -> bool:
     """Trigger another code on an already-authenticated session.
 
-    Two routes exist and only one works on any given account:
-
     `request_2fa_code()` is the newer HSA2 *bridge* flow. It returns False
     rather than raising when the account's boot context does not advertise
-    `auth/bridge/step`, which is not a refusal by Apple — it means this account
-    is not on that route at all.
+    `auth/bridge/step`, which is not a refusal by Apple — it means this
+    account is not on that route at all.
 
-    `_request_2fa_code()` is the route `pyicloud` itself uses during sign-in:
-    a push to the trusted devices plus an SMS when a trusted number exists. It
-    is private, so it is called defensively, but it is the one that delivered
-    the first code on a non-bridge account.
-
-    Returns True when a route reported success, False when neither did.
+    Falling back, push to the trusted devices only, rather than through
+    pyicloud's private helper which also fires an SMS.
     """
     try:
         if api.request_2fa_code():
             return True
-        LOGGER.info("The bridge route is not on offer for this account; using the push route.")
+        LOGGER.info("The bridge route is not on offer for this account; pushing to devices.")
     except PyiCloudNoTrustedNumberAvailable:
-        LOGGER.info("No trusted phone number; using the push route.")
+        LOGGER.info("No trusted phone number; pushing to devices.")
     except PyiCloudTrustedDevicePromptException as exc:
-        LOGGER.info("Bridge prompt failed (%s); using the push route.", exc)
+        LOGGER.info("Bridge prompt failed (%s); pushing to devices.", exc)
 
-    fallback = getattr(api, "_request_2fa_code", None)
-    if not callable(fallback):
+    try:
+        _request_device_code(api)
+    except Exception as exc:  # noqa: BLE001 - report, never abort a sign-in
+        LOGGER.warning("Could not push a code to the trusted devices: %s", exc)
         return False
-    fallback()  # swallows its own transport errors and returns None
     return True
 
 
@@ -397,6 +422,61 @@ def _pyicloud_messages() -> Iterator[list[str]]:
         logger.setLevel(previous)
 
 
+def _other_route(api: PyiCloudService) -> str | None:
+    """The delivery route we did not just check the code against.
+
+    We only control the routes we request ourselves. `pyicloud`'s own
+    `_srp_authentication` still calls `_request_2fa_code()`, which fires the
+    device push *and* an SMS, so on that path two codes exist and the user may
+    reasonably type either one. Checking a code against one route only is what
+    makes a perfectly good code look wrong.
+    """
+    try:
+        current = getattr(api, "two_factor_delivery_method", None)
+    except Exception:  # noqa: BLE001
+        return None
+    if current == "sms":
+        return "trusted_device"
+    try:
+        if api._trusted_phone_number() is None:
+            return None  # no number, so no SMS code can exist
+    except Exception:  # noqa: BLE001
+        return None
+    return "sms"
+
+
+def _validate_on_either_route(api: PyiCloudService, code: str) -> tuple[bool, bool]:
+    """Check the code, then check it against the other route before failing.
+
+    Returns (valid, rejected_on_every_route).
+    """
+    with _pyicloud_messages() as messages:
+        valid = api.validate_2fa_code(code)
+    rejected = any("Code verification failed" in line for line in messages)
+
+    if valid or not rejected:
+        return valid, rejected
+
+    route = _other_route(api)
+    if route is None:
+        return False, True
+
+    LOGGER.info("The code did not verify on this route; trying %s.", route)
+    original = getattr(api, "two_factor_delivery_method", None)
+    _set_delivery_route(api, route)
+    try:
+        with _pyicloud_messages() as messages:
+            valid = api.validate_2fa_code(code)
+    except Exception as exc:  # noqa: BLE001 - the first rejection stands
+        LOGGER.info("Validating on %s failed: %s", route, exc)
+        _set_delivery_route(api, original or "unknown")
+        return False, True
+
+    if not valid:
+        _set_delivery_route(api, original or "unknown")
+    return valid, any("Code verification failed" in line for line in messages)
+
+
 def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
     """Exchange the 6-digit code for a trust token written to the session dir."""
     code = (code or "").strip().replace(" ", "").replace("-", "")
@@ -405,8 +485,7 @@ def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
 
     api = pending.api
     try:
-        with _pyicloud_messages() as messages:
-            valid = api.validate_2fa_code(code)
+        valid, code_rejected = _validate_on_either_route(api, code)
     except PyiCloudTrustedDeviceVerificationException as exc:
         raise LoginError(f"Apple could not verify that code: {exc}") from exc
     except PyiCloudAPIResponseException as exc:
@@ -421,7 +500,6 @@ def finish_login(pending: PendingLogin, code: str) -> dict[str, Any]:
     # `trust_session()` swallows its own failure and its return value is
     # discarded, so a *correct* code whose trust step failed comes back False
     # and reads exactly like a wrong one. Only the log tells them apart.
-    code_rejected = any("Code verification failed" in line for line in messages)
     if not valid and not code_rejected:
         LOGGER.warning(
             "Apple verified the code but the session did not come back trusted. "
