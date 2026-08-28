@@ -1,0 +1,36 @@
+# fly.io deployment. `fly launch --no-deploy`, set secrets, then `fly deploy`.
+app = "icloud-drive-mcp"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ICLOUD_SESSION_DIR = "/data/icloud-session"
+  OAUTH_STORE_PATH = "/data/oauth-store.json"
+  HOST = "0.0.0.0"
+  PORT = "8000"
+
+# The Apple session lives here. Without it, every restart needs a new 2FA code.
+[[mounts]]
+  source = "icloud_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # A cold start in the middle of an OAuth redirect loses the parked request,
+  # so keep one machine warm.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.http_options.response.headers]
+    Strict-Transport-Security = "max-age=31536000"
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "60s"
+  method = "GET"
+  path = "/health"
+  timeout = "5s"

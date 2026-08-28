@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and runtime state — never commit these
+.env
+*.env
+!.env.example
+data/
+session/
+cookies/
+*.cookiejar
+oauth_store.json

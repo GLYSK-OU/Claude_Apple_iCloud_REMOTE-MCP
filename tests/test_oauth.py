@@ -1,0 +1,208 @@
+"""Authorization server behaviour that a browser flow depends on."""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+from mcp.server.auth.provider import AccessToken, AuthorizationParams
+from mcp.shared.auth import OAuthClientInformationFull
+
+from icloud_drive_mcp.oauth import OwnerPasswordOAuthProvider
+
+
+def make_client(client_id="client-1"):
+    return OAuthClientInformationFull(
+        client_id=client_id,
+        client_secret="secret",
+        redirect_uris=["https://claude.ai/api/mcp/auth_callback"],  # type: ignore[list-item]
+        grant_types=["authorization_code", "refresh_token"],
+    )
+
+
+def make_params():
+    return AuthorizationParams(
+        state="state-1",
+        scopes=["icloud.drive"],
+        code_challenge="challenge",
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",  # type: ignore[arg-type]
+        redirect_uri_provided_explicitly=True,
+        resource="https://example.com",
+    )
+
+
+@pytest.fixture
+def provider(tmp_path):
+    return OwnerPasswordOAuthProvider(
+        store_path=tmp_path / "store.json",
+        gate_password="hunter2",
+        static_token="static-abc",
+    )
+
+
+async def test_registered_clients_survive_a_restart(provider, tmp_path):
+    client = make_client()
+    await provider.register_client(client)
+    reborn = OwnerPasswordOAuthProvider(store_path=tmp_path / "store.json", gate_password="hunter2")
+    assert (await reborn.get_client("client-1")).client_id == "client-1"
+
+
+async def test_authorize_parks_the_request_for_consent(provider):
+    client = make_client()
+    await provider.register_client(client)
+    target = await provider.authorize(client, make_params())
+    assert target.startswith("/consent?request_id=")
+
+
+def test_gate_password_comparison(provider):
+    assert provider.check_gate_password("hunter2")
+    assert not provider.check_gate_password("Hunter2")
+    assert not provider.check_gate_password("")
+
+
+def test_gate_disabled_when_no_password_configured(tmp_path):
+    open_provider = OwnerPasswordOAuthProvider(store_path=tmp_path / "s.json", gate_password="")
+    assert open_provider.gate_enabled is False
+    assert open_provider.check_gate_password("") is False
+
+
+async def test_consent_completes_into_a_redirect_with_code_and_state(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    redirect = provider.complete_pending(request_id)
+    assert redirect.startswith("https://claude.ai/api/mcp/auth_callback?")
+    assert "state=state-1" in redirect and "code=code_" in redirect
+
+
+async def test_pending_request_is_single_use(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    provider.complete_pending(request_id)
+    assert provider.take_pending(request_id) is None
+
+
+async def test_denial_redirects_with_access_denied(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    redirect = provider.cancel_pending(request_id)
+    assert "error=access_denied" in redirect and "state=state-1" in redirect
+
+
+async def test_authorization_code_is_single_use(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    redirect = provider.complete_pending(request_id)
+    code_value = redirect.split("code=")[1].split("&")[0]
+
+    code = await provider.load_authorization_code(client, code_value)
+    assert code is not None
+    await provider.exchange_authorization_code(client, code)
+    assert await provider.load_authorization_code(client, code_value) is None
+
+
+async def test_a_code_cannot_be_redeemed_by_another_client(provider):
+    client = make_client()
+    other = make_client("client-2")
+    await provider.register_client(client)
+    await provider.register_client(other)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    code_value = provider.complete_pending(request_id).split("code=")[1].split("&")[0]
+    assert await provider.load_authorization_code(other, code_value) is None
+
+
+async def test_access_token_round_trip(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    code_value = provider.complete_pending(request_id).split("code=")[1].split("&")[0]
+    code = await provider.load_authorization_code(client, code_value)
+    token = await provider.exchange_authorization_code(client, code)
+
+    loaded = await provider.load_access_token(token.access_token)
+    assert loaded is not None and loaded.client_id == "client-1"
+    assert await provider.load_access_token("not-a-token") is None
+
+
+async def test_refresh_token_rotates_and_retires_the_old_one(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    code_value = provider.complete_pending(request_id).split("code=")[1].split("&")[0]
+    code = await provider.load_authorization_code(client, code_value)
+    first = await provider.exchange_authorization_code(client, code)
+
+    refresh = await provider.load_refresh_token(client, first.refresh_token)
+    second = await provider.exchange_refresh_token(client, refresh, ["icloud.drive"])
+    assert second.access_token != first.access_token
+    assert await provider.load_refresh_token(client, first.refresh_token) is None
+
+
+async def test_static_token_is_accepted_and_never_expires(provider):
+    token = await provider.load_access_token("static-abc")
+    assert token is not None
+    assert token.expires_at is None
+    assert await provider.load_access_token("static-abd") is None
+
+
+async def test_no_static_token_configured_means_none_is_accepted(tmp_path):
+    plain = OwnerPasswordOAuthProvider(store_path=tmp_path / "s.json", gate_password="p")
+    assert await plain.load_access_token("") is None
+    assert await plain.load_access_token("anything") is None
+
+
+async def test_expired_access_token_is_rejected(tmp_path):
+    quick = OwnerPasswordOAuthProvider(
+        store_path=tmp_path / "s.json", gate_password="p", access_token_ttl=-1
+    )
+    client = make_client()
+    await quick.register_client(client)
+    request_id = (await quick.authorize(client, make_params())).split("=", 1)[1]
+    code_value = quick.complete_pending(request_id).split("code=")[1].split("&")[0]
+    code = await quick.load_authorization_code(client, code_value)
+    token = await quick.exchange_authorization_code(client, code)
+    assert await quick.load_access_token(token.access_token) is None
+
+
+async def test_revocation_invalidates_a_token(provider):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    code_value = provider.complete_pending(request_id).split("code=")[1].split("&")[0]
+    code = await provider.load_authorization_code(client, code_value)
+    token = await provider.exchange_authorization_code(client, code)
+
+    loaded = await provider.load_access_token(token.access_token)
+    await provider.revoke_token(loaded)
+    assert await provider.load_access_token(token.access_token) is None
+
+
+async def test_tokens_are_not_stored_in_plaintext(provider, tmp_path):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = (await provider.authorize(client, make_params())).split("=", 1)[1]
+    code_value = provider.complete_pending(request_id).split("code=")[1].split("&")[0]
+    code = await provider.load_authorization_code(client, code_value)
+    token = await provider.exchange_authorization_code(client, code)
+
+    contents = (tmp_path / "store.json").read_text()
+    assert token.access_token not in contents
+    assert token.refresh_token not in contents
+
+
+def test_expired_pending_authorization_is_dropped(provider, monkeypatch):
+    from icloud_drive_mcp import oauth
+
+    monkeypatch.setattr(oauth, "PENDING_AUTHORIZATION_TTL", -1)
+    pending = oauth.PendingAuthorization("client-1", make_params())
+    provider._pending["stale"] = pending
+    assert provider.take_pending("stale") is None
+
+
+def test_access_token_model_shape():
+    # Guards against an SDK field rename silently breaking token loading.
+    token = AccessToken(token="t", client_id="c", scopes=["icloud.drive"], expires_at=int(time.time()))
+    assert token.token == "t"
