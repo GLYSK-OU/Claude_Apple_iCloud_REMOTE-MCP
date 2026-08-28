@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "icloud-drive": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/plugin/scripts/run-server.sh",
+      "args": ["stdio"],
+      "env": {
+        "ICLOUD_MCP_SOURCE": "${CLAUDE_PLUGIN_ROOT}",
+        "ICLOUD_MCP_VENV": "${CLAUDE_PLUGIN_DATA}/venv",
+        "ICLOUD_SESSION_DIR": "${CLAUDE_PLUGIN_DATA}/session"
+      }
+    }
+  }
+}

@@ -1,13 +1,31 @@
-# iCloud Drive → Claude connector
+# iCloud Drive → Claude
 
-An MCP server that gives Claude direct read/write access to Apple iCloud Drive.
-No Mac or PC with synced iCloud folders is involved — the server talks to
-Apple's iCloud service itself, so it works from Claude on the web, Claude
-Desktop, and Claude Code alike.
+Read and write Apple iCloud Drive from Claude. No Mac or PC with synced iCloud
+folders is involved — this talks to Apple's iCloud service directly.
+
+It ships two ways, and which you want depends on where you use Claude:
+
+| | **Plugin** | **Connector** |
+|---|---|---|
+| Install | `/plugin install icloud-drive@glysk` | Paste a URL into Settings → Connectors |
+| Runs | On your own machine, over stdio | On a server you host |
+| Works in | Claude Code | Claude on the web, and anywhere else |
+| Needs hosting | No | Yes, a public HTTPS URL |
+| Adds | 3 skills that teach Claude to use it well | Tools only |
+
+Both expose the same nine tools from the same code. Start with the plugin if
+you are in Claude Code; the connector is what you need for web sessions.
 
 ```
-Claude (web / desktop / code)  ──HTTPS+OAuth──►  this server  ──►  Apple iCloud
+Claude Code  ──stdio──►  connector (local)   ──►  Apple iCloud
+Claude web   ──OAuth──►  connector (hosted)  ──►  Apple iCloud
 ```
+
+> **On wanting "a plugin like the Google Drive one".** The Google Drive entry
+> that ships inside Claude is a first-party Anthropic integration, and third
+> parties cannot add to that list. Everyone else — including Google, for its
+> own Drive MCP server — ships either a Claude Code plugin or a custom
+> connector. This repo is both.
 
 ---
 
@@ -75,9 +93,51 @@ Safety behaviours worth knowing:
 
 ---
 
-## Setup
+## Install as a plugin (Claude Code)
 
-### 1. Deploy
+Nothing to host. The connector runs on your machine and Claude Code starts it
+for you.
+
+```
+/plugin marketplace add GLYSK-OU/iCloud_Drive_2_Claude_Connector
+/plugin install icloud-drive@glysk
+```
+
+Then sign in to Apple:
+
+```
+/icloud-drive:setup
+```
+
+That walks you through it and, when the time comes, tells you the one command
+to run in your own terminal. **Your Apple password is typed into that prompt,
+never into the chat** — the setup skill is written to refuse it otherwise.
+
+Check the connection any time with `/icloud-drive:status`.
+
+**Requirements:** Python 3.11 or newer on your `PATH`. On first run the plugin
+builds a private virtualenv under `~/.claude/plugins/data/`, which takes about
+a minute; after that startup is instant, and the environment survives plugin
+updates.
+
+### What the plugin adds beyond the tools
+
+Three skills ride along, which is the part a bare MCP server cannot give you:
+
+- **`icloud-drive`** — model-invoked. Teaches Claude the things that are not
+  obvious from tool schemas: that search matches names and not contents, that
+  a `.docx` comes back as base64 rather than prose, that writes are whole-file
+  with no append, and that an expired session needs a human rather than a
+  retry.
+- **`/icloud-drive:setup`** — the sign-in walkthrough described above.
+- **`/icloud-drive:status`** — a real round trip to the Drive, not just stored
+  state, reported in plain language.
+
+---
+
+## Setup as a connector (Claude on the web)
+
+### 1. Deploy the server
 
 The server needs a public HTTPS URL for Claude on the web to reach it, and a
 persistent volume so the Apple session survives restarts.
@@ -156,7 +216,8 @@ claude mcp add --transport http icloud-drive https://your-server/mcp \
   --header "Authorization: Bearer YOUR_MCP_STATIC_TOKEN"
 ```
 
-**Claude Desktop / Claude Code, running locally** — no HTTP, no OAuth:
+**Claude Desktop, running locally** — no HTTP, no OAuth. (In Claude Code,
+install the plugin instead; it does this for you.)
 
 ```json
 {
@@ -259,6 +320,22 @@ src/icloud_drive_mcp/
   oauth.py       OAuth 2.1 authorization server
   http_app.py    MCP transport, consent screen, admin sign-in
   login.py       the Apple 2FA state machine, shared by CLI and web
+
+.claude-plugin/  plugin.json (the plugin) + marketplace.json (this repo as one)
+.mcp.json        how the plugin launches the server
+plugin/
+  scripts/       the launcher that bootstraps the venv on first run
+  skills/        the three skills the plugin ships
+```
+
+The repo root *is* the plugin, so an install carries the Python source with it
+and needs no separate package published anywhere.
+
+Working on the plugin:
+
+```bash
+claude plugin validate .                 # both manifests
+claude --plugin-dir . -p "…"             # load without installing
 ```
 
 ## Troubleshooting
@@ -276,6 +353,15 @@ check `/status`.
 **Sign-in needs a security key** — hardware keys must be physically present, so
 use `icloud-drive-mcp login` on a machine with the key attached rather than the
 web form.
+
+**Plugin installs but no `icloud_*` tools appear** — the server failed to
+start. Check the `/plugin` manager's **Errors** tab. The usual cause is Python
+3.11+ missing from `PATH`; the first run also needs network access to PyPI to
+build its virtualenv.
+
+**Plugin tools vanished after an update** — run `/reload-plugins`. The launcher
+rebuilds its environment when the packaged code changes, which takes a moment
+on the first session after an update.
 
 ## Licence
 

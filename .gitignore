@@ -20,3 +20,6 @@ session/
 cookies/
 *.cookiejar
 oauth_store.json
+
+# Build artifacts
+build/
