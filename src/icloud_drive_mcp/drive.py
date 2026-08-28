@@ -306,9 +306,7 @@ class DriveClient:
         # value wins, because a read has to survive the trip back through the
         # conversation as well as the trip off Apple's servers.
         candidates = [
-            value
-            for value in (max_bytes, self._config.max_file_bytes, self._config.max_read_bytes)
-            if value
+            value for value in (max_bytes, self._config.max_file_bytes, self._config.max_read_bytes) if value
         ]
         limit = min(candidates) if candidates else 0
         with self._lock:
