@@ -20,9 +20,9 @@ Clone into your development directory — on this project's primary machine that
 is `~/Developer/`:
 
 ```bash
-git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
-  ~/Developer/iCloud_Drive_2_Claude_Connector
-cd ~/Developer/iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git \
+  ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
+cd ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
 
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest        # 100 tests, no Apple account needed

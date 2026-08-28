@@ -466,3 +466,64 @@ def test_the_installer_ends_with_one_url_and_no_shell_steps():
     assert "Settings → Connectors" in tail
     assert "docker " not in tail, "nothing left for the user to run"
     assert "python" not in tail
+
+
+# ------------------------------------------------------------- repository name
+
+
+REPO_NAME = "Claude_Apple_iCloud_REMOTE-MCP"
+# Assembled rather than written whole, so this file is not its own offender.
+OLD_REPO_NAME = "iCloud_Drive" + "_2_Claude_Connector"
+
+
+def test_no_file_still_points_at_the_old_repository_name():
+    """A stale URL here is not cosmetic. The installer curls from it, and the
+    deploy script clones from it, so a missed one is a broken install rather
+    than a broken link."""
+    import pathlib
+    import subprocess
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+
+    offenders = []
+    for name in tracked:
+        path = root / name
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if OLD_REPO_NAME in text and name != "tests/test_scope.py":
+            offenders.append(name)
+
+    assert not offenders, f"still naming the old repository: {offenders}"
+
+
+def test_the_installer_and_deploy_agree_on_where_the_source_lives():
+    """They are the two things that actually fetch code. Disagreeing would
+    install one version and update to another."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    installer = (root / "install.sh").read_text()
+    deploy = (root / "deploy" / "infomaniak" / "deploy-icloud-mcp.sh").read_text()
+
+    expected = f"https://github.com/GLYSK-OU/{REPO_NAME}.git"
+    assert expected in installer
+    assert expected in deploy
+
+
+def test_the_one_line_install_uses_a_raw_url_that_resolves():
+    """raw.githubusercontent.com serves the branch, not the repo page. Getting
+    this shape wrong yields an HTML error page piped straight into sh."""
+    import pathlib
+    import re
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text()
+    match = re.search(r"https://raw\.githubusercontent\.com/\S+install\.sh", readme)
+
+    assert match, "the README must carry the one-line install"
+    assert f"/GLYSK-OU/{REPO_NAME}/" in match.group(0)
+    assert match.group(0).endswith("/main/install.sh"), "must point at a branch"

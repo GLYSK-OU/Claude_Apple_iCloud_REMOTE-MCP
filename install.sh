@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Claude ⇄ Apple iCloud — one-command install.
 #
-#   curl -fsSL https://raw.githubusercontent.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/main/install.sh | sudo bash
 #
 # Everything after that is this script's job: preflight, DNS, secrets, image,
 # vhost, certificate, health. It ends with one URL to open, and asks for
 # nothing that can be worked out on its own.
 set -euo pipefail
 
-REPO="${ICLOUD_MCP_REPO:-https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git}"
+REPO="${ICLOUD_MCP_REPO:-https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git}"
 BRANCH="${ICLOUD_MCP_BRANCH:-Alpha}"
 SRC="/opt/icloud-mcp-src"
 PORT="${ICLOUD_MCP_PORT:-8440}"

@@ -60,7 +60,7 @@ endpoints and PyPI (when first installing dependencies).
 ## Contact
 
 Open an issue at
-<https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/issues>, or a
+<https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/issues>, or a
 private advisory for anything security-sensitive.
 
 ## Changes

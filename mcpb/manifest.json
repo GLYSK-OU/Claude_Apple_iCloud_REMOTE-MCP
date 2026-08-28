@@ -9,12 +9,12 @@
     "name": "GLYSK OU",
     "url": "https://github.com/GLYSK-OU"
   },
-  "homepage": "https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector",
-  "documentation": "https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector#readme",
-  "support": "https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/issues",
+  "homepage": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP",
+  "documentation": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP#readme",
+  "support": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/issues",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector"
+    "url": "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP"
   },
   "license": "MIT",
   "icon": "icon.png",
@@ -27,7 +27,7 @@
     "documents"
   ],
   "privacy_policies": [
-    "https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/blob/main/PRIVACY.md"
+    "https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/blob/main/PRIVACY.md"
   ],
   "server": {
     "type": "uv",

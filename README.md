@@ -50,7 +50,7 @@ on claude.ai makes it appear on your phone and tablet by itself.
 On a server with a domain pointing at it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/main/install.sh | sudo bash
 ```
 
 It asks for the domain, then does the rest: preflight, DNS and IPv6 checks,
@@ -147,7 +147,7 @@ Safety behaviours worth knowing:
 ## Install as a desktop extension (Claude Desktop)
 
 Download `icloud-drive.mcpb` from the
-[latest release](https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/releases)
+[latest release](https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/releases)
 and double-click it. Claude Desktop shows what it does and what it needs, then
 asks for:
 
@@ -199,7 +199,7 @@ Nothing to host. The connector runs on your machine and Claude Code starts it
 for you.
 
 ```
-/plugin marketplace add GLYSK-OU/iCloud_Drive_2_Claude_Connector
+/plugin marketplace add GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP
 /plugin install icloud-drive@glysk
 ```
 
@@ -210,11 +210,11 @@ once `Alpha` is merged to `main`. To try it from a feature branch,
 clone `Alpha` and point the marketplace at the checkout:
 
 ```bash
-git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
-  ~/Developer/iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git \
+  ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
 ```
 ```
-/plugin marketplace add ./iCloud_Drive_2_Claude_Connector
+/plugin marketplace add ./Claude_Apple_iCloud_REMOTE-MCP
 /plugin install icloud-drive@glysk
 ```
 
@@ -258,9 +258,9 @@ The server needs a public HTTPS URL for Claude on the web to reach it, and a
 persistent volume so the Apple session survives restarts.
 
 ```bash
-git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
-  ~/Developer/iCloud_Drive_2_Claude_Connector
-cd ~/Developer/iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git \
+  ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
+cd ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
 cp .env.example .env
 ```
 
@@ -486,9 +486,9 @@ Three levels, cheapest first. The first two need no Apple account.
 ### 1. The plumbing, offline (2 minutes)
 
 ```bash
-git clone -b Alpha https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git \
-  ~/Developer/iCloud_Drive_2_Claude_Connector
-cd ~/Developer/iCloud_Drive_2_Claude_Connector
+git clone -b Alpha https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git \
+  ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
+cd ~/Developer/Claude_Apple_iCloud_REMOTE-MCP
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest          # expect: 139 passed
 claude plugin validate .            # expect: Validation passed
@@ -623,7 +623,7 @@ on the first session after an update.
 The connector can read, write, and delete every file in the Drive it is signed
 in to. [SECURITY.md](SECURITY.md) covers how to deploy it safely, what it does
 to protect itself, and the limitations it does not hide. Report vulnerabilities
-through a [private advisory](https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/security/advisories/new),
+through a [private advisory](https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/security/advisories/new),
 not a public issue.
 
 It is self-hosted and sends the maintainers nothing — no telemetry, no

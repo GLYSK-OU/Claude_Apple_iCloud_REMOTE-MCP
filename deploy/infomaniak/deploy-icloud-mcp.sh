@@ -18,7 +18,7 @@ SRC="/opt/icloud-mcp-src"
 APP="/opt/icloud-mcp"
 CONF="/etc/icloud-mcp"
 ENV_FILE="${CONF}/icloud-mcp.env"
-REPO="https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector.git"
+REPO="https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP.git"
 BRANCH="${ICLOUD_MCP_BRANCH:-Alpha}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

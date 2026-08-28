@@ -25,7 +25,7 @@ deploying it, and please report anything you find.
 
 ## Reporting a vulnerability
 
-Open a [private security advisory](https://github.com/GLYSK-OU/iCloud_Drive_2_Claude_Connector/security/advisories/new)
+Open a [private security advisory](https://github.com/GLYSK-OU/Claude_Apple_iCloud_REMOTE-MCP/security/advisories/new)
 rather than a public issue. We aim to acknowledge within 72 hours.
 
 Please include what you did, what happened, and what you expected. A proof of
