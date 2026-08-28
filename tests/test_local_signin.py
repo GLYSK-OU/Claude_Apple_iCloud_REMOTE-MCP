@@ -545,3 +545,63 @@ def test_a_broken_diagnostic_cannot_break_sign_in(config, monkeypatch):
             raise RuntimeError("421 Missing X-APPLE-WEBAUTH-HSA-LOGIN cookie")
 
     login._log_two_factor_route(_Exploding())  # must not raise
+
+
+def test_the_diagnosis_reads_only_local_state(config, monkeypatch):
+    """It runs against the trap API, whose network properties raise if touched."""
+    from icloud_drive_mcp import login
+
+    api = _FakeAPINetworkTrap()
+    api._auth_data = {
+        "mode": "sms",
+        "authFactors": ["hsa2"],
+        "authInitialRoute": "auth/bridge/step",
+        "hasTrustedDevices": True,
+    }
+    api._trusted_phone_number = lambda: object()
+    api._supports_trusted_device_bridge = lambda: True
+    api._can_request_sms_2fa_code = lambda: True
+
+    facts = login.two_factor_diagnosis(api)
+
+    assert facts["mode"] == "sms"
+    assert facts["initial_route"] == "auth/bridge/step"
+    assert facts["has_trusted_phone"] is True
+    assert facts["bridge_offered"] is True
+    assert facts["sms_offered"] is True
+
+
+def test_the_diagnosis_survives_every_field_being_hostile():
+    """A missing or raising field must degrade to a note, never an exception."""
+    from icloud_drive_mcp import login
+
+    class _Hostile:
+        def __getattr__(self, name):
+            raise RuntimeError(f"421 on {name}")
+
+    facts = login.two_factor_diagnosis(_Hostile())
+
+    assert facts, "the diagnosis should still report something"
+    assert any("unreadable" in str(value) for value in facts.values())
+
+
+def test_the_diagnosis_names_the_case_where_no_route_was_offered(config, caplog):
+    """Neither bridge nor SMS means the code went to a device as a push prompt.
+
+    Telling someone to check their messages in that case sends them looking in
+    the one place the code was never going to appear.
+    """
+    import logging
+
+    from icloud_drive_mcp import login
+
+    api = _FakeAPI2FA()
+    api._auth_data = {}
+    api._trusted_phone_number = lambda: None
+    api._supports_trusted_device_bridge = lambda: False
+    api._can_request_sms_2fa_code = lambda: False
+
+    with caplog.at_level(logging.WARNING, logger=login.LOGGER.name):
+        login._log_two_factor_route(api)
+
+    assert "trusted device" in caplog.text

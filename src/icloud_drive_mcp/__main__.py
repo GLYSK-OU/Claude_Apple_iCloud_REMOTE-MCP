@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .config import Config
@@ -42,7 +43,13 @@ def main(argv: list[str] | None = None) -> int:
             "status: print whether the stored session still works."
         ),
     )
-    parser.add_argument("--log-level", default="INFO")
+    # Env as well as flag: the container has no convenient place to pass a
+    # flag, and DEBUG is what surfaces pyicloud's own delivery messages,
+    # which are the only record of a two-factor code that never arrived.
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("ICLOUD_MCP_LOG_LEVEL", "INFO"),
+    )
     args = parser.parse_args(argv)
 
     _configure_logging(args.log_level, stdio=args.mode == "stdio")

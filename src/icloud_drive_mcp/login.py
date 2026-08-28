@@ -58,24 +58,75 @@ class PendingLogin:
         return time.time() - self.created_at > PENDING_TTL_SECONDS
 
 
-def _log_two_factor_route(api: PyiCloudService) -> None:
-    """Record which route Apple is offering, for when a code never arrives.
+def two_factor_diagnosis(api: PyiCloudService) -> dict[str, Any]:
+    """Describe the delivery route Apple offered, for when no code arrives.
 
-    Read only attributes backed by local state. Several `pyicloud` properties
-    are network calls wearing an attribute's clothes — `trusted_devices` does a
-    session.get against a legacy endpoint that 421s on a modern account, and
-    reading it from a log statement took down the whole sign-in. Diagnostics
-    must never be able to do that, so this is also belt-and-braces wrapped.
+    Everything here is read from state `pyicloud` already holds — the auth
+    options it fetched during the password step. Nothing makes a request.
+
+    That distinction matters: several `pyicloud` properties are network calls
+    wearing an attribute's clothes. `trusted_devices` does a session.get
+    against a legacy 2SA endpoint that 421s on a modern account, and reading
+    it from a log statement once took down the whole sign-in. Diagnostics must
+    never be able to do that.
+
+    This exists because the delivery itself is invisible. `pyicloud` requests
+    the code inside its constructor and swallows both the trusted-device push
+    and the SMS failure at debug level, so a code that never arrives leaves no
+    trace at all. These fields are the next best thing: they say which routes
+    Apple was even offering.
     """
+    facts: dict[str, Any] = {}
+
+    def record(name: str, read: Any) -> None:
+        try:
+            facts[name] = read()
+        except Exception as exc:  # noqa: BLE001 - diagnostics may never break sign-in
+            facts[name] = f"<unreadable: {exc}>"
+
+    # Even this read goes through a guard. A property that raises is exactly
+    # what broke sign-in once, and it must not be able to do so from here.
     try:
+        auth = getattr(api, "_auth_data", None)
+    except Exception as exc:  # noqa: BLE001
+        facts["auth_data"] = f"<unreadable: {exc}>"
+        auth = None
+    auth = auth if isinstance(auth, dict) else {}
+
+    record("delivery", lambda: getattr(api, "two_factor_delivery_method", "unknown"))
+    record("notice", lambda: getattr(api, "two_factor_delivery_notice", None))
+    record("requires_2fa", lambda: getattr(api, "requires_2fa", None))
+    record("requires_2sa", lambda: getattr(api, "requires_2sa", None))
+    record("security_keys", lambda: getattr(api, "security_key_names", None))
+    # What Apple said it would accept. `mode` is "sms" when SMS is the active
+    # route; the bridge route means the code goes to a trusted device instead.
+    record("mode", lambda: auth.get("mode"))
+    record("auth_factors", lambda: auth.get("authFactors"))
+    record("initial_route", lambda: auth.get("authInitialRoute"))
+    record("has_trusted_devices", lambda: auth.get("hasTrustedDevices"))
+    # Whether an SMS was even possible. If this is False, no SMS was sent
+    # because Apple offered no number to send it to — not because it failed.
+    record("has_trusted_phone", lambda: api._trusted_phone_number() is not None)
+    record("bridge_offered", lambda: api._supports_trusted_device_bridge())
+    record("sms_offered", lambda: api._can_request_sms_2fa_code())
+    return facts
+
+
+def _log_two_factor_route(api: PyiCloudService) -> None:
+    """Log the diagnosis. Belt-and-braces: a log line may never break sign-in."""
+    try:
+        facts = two_factor_diagnosis(api)
         LOGGER.info(
-            "Two-factor route: delivery=%s security_keys=%s requires_2fa=%s requires_2sa=%s",
-            getattr(api, "two_factor_delivery_method", "unknown"),
-            getattr(api, "security_key_names", None),
-            getattr(api, "requires_2fa", None),
-            getattr(api, "requires_2sa", None),
+            "Two-factor route: %s",
+            " ".join(f"{key}={value!r}" for key, value in facts.items()),
         )
-    except Exception as exc:  # noqa: BLE001 - a log line may never break sign-in
+        if not facts.get("bridge_offered") and not facts.get("sms_offered"):
+            LOGGER.warning(
+                "Apple offered neither the bridge route nor SMS. The code can only have "
+                "gone to a trusted device as a push prompt — check the Apple devices "
+                "signed in to this account, not the phone's messages."
+            )
+    except Exception as exc:  # noqa: BLE001
         LOGGER.debug("Could not log the two-factor route: %s", exc)
 
 

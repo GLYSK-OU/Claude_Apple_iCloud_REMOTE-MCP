@@ -69,10 +69,26 @@ Connectors are an account setting, so it appears on iPhone and iPad on its own.
 | Redeploy | `/opt/icloud-mcp-src/deploy/infomaniak/deploy-icloud-mcp.sh` |
 | Session health | `curl -s https://icloud.lopes.me/status -H "Authorization: Bearer $ADMIN_TOKEN"` |
 | Config | `/etc/icloud-mcp/icloud-mcp.env` (0600) |
+| Verbose logs | add `ICLOUD_MCP_LOG_LEVEL=DEBUG` to that file, then restart |
 | State | Docker volume `icloud-mcp-data` |
 | Caddy vhost | `/etc/caddy/conf.d/icloud.caddy` |
 
 Always `caddy validate --config /etc/caddy/Caddyfile` before reloading.
+
+### When the two-factor code never arrives
+
+With HSA2 the code normally arrives as a **push prompt on a trusted Apple
+device** — the map and the Allow button — not as an SMS. SMS is a fallback
+Apple offers only when it has a trusted number for the account and puts the
+challenge on the SMS route.
+
+`docker logs icloud-mcp --tail 50` now carries a `Two-factor route:` line for
+every sign-in. `bridge_offered` and `sms_offered` say which routes Apple was
+willing to use; if both are False, no SMS was ever going to arrive and the
+code went to a device.
+
+`pyicloud` performs the delivery inside its constructor and swallows failures
+at debug level, so set `ICLOUD_MCP_LOG_LEVEL=DEBUG` and restart to see them.
 
 **Re-signing in to Apple** is needed about every 30 days — Apple's limit, not
 this software's. Same `/admin/login` link. Nothing else has to change, and the
