@@ -566,16 +566,27 @@ def test_the_name_is_an_identifier_and_the_title_carries_the_branding(config):
 # ------------------------------------------- nothing personal in a public repo
 
 
+# Assembled from fragments rather than written as literals. This file would
+# otherwise be its own offender, and a history-rewriting text filter would
+# silently replace the very terms the guard exists to catch — which is exactly
+# what happened once, turning "infomaniak" into a pattern that matched the
+# deploy/vps path instead.
+_HOST = "info" + "maniak"
+_DB = "couch" + "db"
+_MON = "glan" + "ces"
+_SIB = "ats" + "-mcp"
+_VAULT = "obsidian" + "-web-mcp"
+
 PRIVATE_PATTERNS = (
-    r"\blopes\.me\b",
-    r"\binfomaniak\b",
+    r"\b" + "lopes" + r"\.me\b",
+    r"\b" + _HOST + r"\b",
     r"\bov-[a-z0-9]{6}\b",
     # The specific host inventory that was published: naming what else runs
     # on a machine hands a targeted attacker a map they would have to guess at.
-    r"\bcouchdb\b",
-    r"\bglances\b",
-    r"\bats-mcp\b",
-    r"\bobsidian-web-mcp\b",
+    r"\b" + _DB + r"\b",
+    r"\b" + _MON + r"\b",
+    r"\b" + _SIB + r"\b",
+    r"\b" + _VAULT + r"\b",
     # Any literal public IPv4 outside the documentation ranges. 160.79.104.0/21
     # is exempt: that is Anthropic's own published egress range, allow-listed in
     # the Caddy config, and belongs to them rather than to whoever deploys this.
@@ -646,3 +657,106 @@ def test_the_vhost_template_and_its_substitution_agree():
     assert f"s/{escaped}/${{DOMAIN}}/" in deploy, (
         f"the deploy script does not substitute {placeholder.group(1)!r}"
     )
+
+
+# ------------------------------------------ page scripts must actually execute
+
+
+def test_the_picker_script_is_a_real_script_block():
+    """`script` is interpolated into the body verbatim. Without the tags the
+    JavaScript is rendered as visible page text: the master switch silently
+    does nothing, and the page ends in a wall of source. Both were reported."""
+    from icloud_drive_mcp.webui import signin_password_page
+
+    body = signin_password_page("a@b.c", "/admin/login").body.decode()
+    marker = body.index("getElementById('all')")
+    before, after = body[:marker], body[marker:]
+
+    assert before.rstrip().endswith(tuple("({;")) or "<script>" in before[-400:], (
+        "the picker script is not inside a <script> block"
+    )
+    assert "<script>" in before[-400:]
+    assert "</script>" in after[:1200]
+
+
+def test_a_page_refuses_bare_javascript():
+    """A programming error, not a runtime condition — so it raises rather than
+    rendering something that looks broken to whoever opens it."""
+    import pytest as _pytest
+
+    from icloud_drive_mcp.webui import page
+
+    with _pytest.raises(ValueError, match="<script>"):
+        page("t", "<p>x</p>", script="alert(1)")
+
+    # A properly wrapped block is fine.
+    assert page("t", "<p>x</p>", script="<script>void 0;</script>").status_code == 200
+
+
+def test_every_page_that_ships_a_script_wraps_it():
+    """Catches the next one at import time rather than in somebody's browser."""
+    import pathlib
+    import re
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / "icloud_drive_mcp" / "webui.py"
+    ).read_text()
+
+    for name, block in re.findall(r"^(_\w*SCRIPT)\s*=\s*\"\"\"(.*?)\"\"\"", source, re.S | re.M):
+        assert block.lstrip().startswith("<script"), f"{name} does not open a script block"
+        assert "</script>" in block, f"{name} does not close its script block"
+
+
+# --------------------------------------------------- the sign-in page's shape
+
+
+def _signin_body() -> str:
+    from icloud_drive_mcp.webui import signin_password_page
+
+    return signin_password_page("a@b.c", "/admin/login").body.decode()
+
+
+def test_the_un_scoped_session_warning_is_never_folded():
+    """Everything else on this page may collapse. This cannot: it is what makes
+    the switch list a real choice rather than decoration, and an earlier version
+    of this page got the same fact flatly wrong."""
+    body = _signin_body()
+    notice = body.index('class="notice"')
+    first_fold = body.index("<details")
+
+    assert notice < first_fold, "the scope warning must sit above any disclosure"
+    for phrase in ("no Drive-only login", "Photos", "Contacts", "separate Apple ID"):
+        assert phrase in body[notice : notice + 900], phrase
+
+
+def test_the_reader_reaches_the_form_before_a_wall_of_text():
+    """Three consent panels used to sit between the heading and the password
+    field. Honest, and unreadable — so they now fold below the form."""
+    body = _signin_body()
+
+    assert body.index('name="password"') < body.index("What this software does"), (
+        "the detailed panels must come after the form, not before it"
+    )
+
+
+def test_the_full_disclosure_is_still_on_the_page():
+    """Folding is not removing. All three panels remain, one click away."""
+    body = _signin_body()
+
+    for heading in (
+        "What this software does",
+        "What signing in actually grants",
+        "What stays out of reach",
+    ):
+        assert heading in body, heading
+
+
+def test_the_unreachable_services_fold_but_stay_listed():
+    from icloud_drive_mcp.webui import service_picker
+
+    markup = service_picker()
+    head, _, tail = markup.partition("<details")
+
+    assert head.count("<li") == 11, "the grantable services stay visible"
+    assert tail.count("<li") == 9, "the unreachable ones fold"
+    assert 'id="all"' in head, "the master switch must not be inside the fold"

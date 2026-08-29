@@ -88,6 +88,21 @@ _PAGE = """<!doctype html>
   p.lead {{ color: var(--ink); }}
   label {{ display: block; font-size: 12.5px; font-weight: 600; margin: 16px 0 6px; }}
 
+
+  /* ---- scope notice + disclosures ------------------------------------ */
+  .notice {{ display:flex; gap:10px; align-items:flex-start; margin:16px 0 4px;
+             padding:12px 14px; border-radius:10px; font-size:13px; line-height:1.5;
+             background:var(--warn-bg); color:var(--warn);
+             border:1px solid color-mix(in srgb, var(--warn) 25%, transparent); }}
+  .notice .ico {{ flex:0 0 auto; font-size:15px; line-height:1.35; }}
+  details.more {{ margin-top:18px; border-top:1px solid var(--hair); padding-top:12px; }}
+  details.more > summary {{ cursor:pointer; font-size:13px; font-weight:600;
+                            color:var(--muted); list-style:none; padding:4px 0; }}
+  details.more > summary::-webkit-details-marker {{ display:none; }}
+  details.more > summary::before {{ content:"\25B8 "; display:inline-block;
+                                    transition:transform .15s ease; }}
+  details.more[open] > summary::before {{ transform:rotate(90deg); }}
+  details.more[open] > summary {{ color:var(--ink); }}
   /* ---- service picker ---------------------------------------------- */
   .svc {{ list-style:none; padding:0; margin:14px 0 0; }}
   .svc li {{ display:flex; align-items:flex-start; gap:12px; padding:11px 2px;
@@ -198,6 +213,16 @@ def page(
     can see. The consent page is exactly that: it redirects to the OAuth
     client's callback.
     """
+    # `script` is interpolated into the body verbatim, so a caller that omits
+    # the tags gets its JavaScript rendered as visible text — the page looks
+    # broken and nothing runs. That shipped once. Refuse it rather than repeat
+    # it: this is a programming error, not a runtime condition.
+    if script and not script.lstrip().startswith("<script"):
+        raise ValueError(
+            "page(script=...) must be a complete <script>…</script> block; "
+            "bare JavaScript is interpolated as text and never executes."
+        )
+
     headers = dict(LOCAL_PAGE_HEADERS if local else SECURITY_HEADERS)
     if form_action:
         headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
@@ -219,6 +244,23 @@ def page(
 
 def alert(message: str, kind: str = "error") -> str:
     return f'<div class="alert {kind}">{html.escape(message)}</div>'
+
+
+def scope_notice() -> str:
+    """The one sentence that must never be collapsed.
+
+    Everything else on this page can fold away. This cannot: it is the fact
+    that makes the switch list below a real choice rather than decoration.
+    """
+    return """
+    <div class="notice">
+      <span class="ico" aria-hidden="true">&#9888;</span>
+      <span><strong>Apple has no Drive-only login.</strong> The session created here can reach
+      Photos, Contacts, Calendar, Reminders, Notes and Find My as well. This software refuses
+      every service you leave switched off below &mdash; in code, not as a policy &mdash; but the
+      session itself stays un-restricted. If that matters, use a separate Apple ID.</span>
+    </div>
+    """
 
 
 def permissions_panel() -> str:
@@ -378,9 +420,10 @@ def service_picker(granted: frozenset[str] | None = None) -> str:
             f'<label class="sw">{control}<span></span></label>{hidden}</li>'
         )
 
+    unreachable: list[str] = []
     for service in UNAVAILABLE:
         icon = SERVICE_ICONS.get(service.key, "\u2022")
-        rows.append(
+        unreachable.append(
             f'<li class="off"><span class="ico" aria-hidden="true">{icon}</span>'
             f'<span class="txt"><span class="nm">{html.escape(service.name)}</span>'
             f'<span class="ds">{html.escape(service.unavailable_because)}</span></span>'
@@ -395,10 +438,14 @@ def service_picker(granted: frozenset[str] | None = None) -> str:
         <span></span></label>
       </div>
       <ul class="svc">{"".join(rows)}</ul>
+      <details class="more">
+        <summary>{len(unreachable)} more Apple services, and why they are out of reach</summary>
+        <ul class="svc">{"".join(unreachable)}</ul>
+      </details>
     """
 
 
-_PICKER_SCRIPT = """
+_PICKER_SCRIPT = """<script>
 (function () {
   var all = document.getElementById('all');
   if (!all) return;
@@ -414,6 +461,7 @@ _PICKER_SCRIPT = """
   boxes.forEach(function (b) { b.addEventListener('change', sync); });
   sync();
 })();
+</script>
 """
 
 
@@ -448,7 +496,7 @@ def signin_password_page(
            goes straight to Apple from here — it is never stored, never sent to Claude, and
            never appears in your conversation.</p>
         {alert(message) if message else ""}
-        {permissions_panel()}
+        {scope_notice()}
         <form method="post" action="{action}">
           <input type="hidden" name="step" value="password">
           <label for="apple_id">Apple ID</label>
@@ -466,6 +514,10 @@ def signin_password_page(
         <p class="note"><strong>Use your account's real password.</strong> An app-specific
            password will not work: Apple accepts those only for Mail, Contacts, Calendar and
            Reminders, never for iCloud Drive. GLYSK never receives it.</p>
+        <details class="more">
+          <summary>Exactly what this can and cannot touch</summary>
+          {permissions_panel()}
+        </details>
         """,
         script=_PICKER_SCRIPT,
         local=True,
@@ -548,6 +600,7 @@ __all__ = [
     "page",
     "alert",
     "permissions_panel",
+    "scope_notice",
     "service_picker",
     "signin_password_page",
     "signin_code_page",
